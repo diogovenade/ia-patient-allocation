@@ -50,19 +50,16 @@ def parse_data(file_path):
             "bed_capacity": int(parts[1]),
             "workload_capacity": float(parts[2]),
             "major_specialization": parts[3],
-            "minor_specializations": parts[4] if parts[4] != "NONE" else [],
+            "minor_specializations": parts[4].split(';') if parts[4] != "NONE" else [],
             "carryover_patients": list(map(int, parts[5].split(';'))),
             "carryover_workload": list(map(float, parts[6].split(';')))
         })
-    
-    
-    specialization_index_map = {spec["id"]: idx for idx, spec in enumerate(data["specializations"])}
 
     for line in lines[patient_start:]:
         parts = line.strip().split()
         data["patients"].append({
             "id": parts[0],
-            "specialization": specialization_index_map[parts[1]],
+            "specialization": parts[1],
             "earliest_admission": int(parts[2]),
             "latest_admission": int(parts[3]),
             "length_of_stay": int(parts[4]),
@@ -72,10 +69,9 @@ def parse_data(file_path):
 
     return data
 
-'''
-data = parse_data("dataset/s0m0.dat")
 
-print(f"Days in planning period: {data['days']}")
-print(f"First ward details: {data['wards'][0]}")
-print(f"First patient details: {data['patients'][0]['specialization']}")'
-'''
+#data = parse_data("dataset/s3m2.dat")
+
+#print(f"Days in planning period: {data['days']}")
+#print(f"First ward details: {data['wards'][0]}")
+#print(f"First patient details: {data['patients'][0]}")

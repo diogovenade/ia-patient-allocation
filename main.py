@@ -25,6 +25,9 @@ class BalancedWorkload(ElementwiseProblem):
       self.n_days = n_days
       self.patients = patients
 
+      # Convert specialization IDs to indices
+      self.spec_to_idx = {spec['id']: idx for idx, spec in enumerate(data['specializations'])}
+
    def _evaluate(self, x, out, *args, **kwargs):
       # Ward and day assignments from the solution array
       ward_assignments = x[:self.n_patients].astype(int)
@@ -43,16 +46,19 @@ class BalancedWorkload(ElementwiseProblem):
          admission_delays += delay * self.data['weights']['delay']
 
          # OT usage
-         ot_usage[patient['specialization'], day] += patient['surgery_duration']
+         spec_idx = self.spec_to_idx[patient['specialization']]
+         ot_usage[spec_idx, day] += patient['surgery_duration']
       
       # OT over and under utilization
-      ot_over = np.maximum(0, ot_usage - np.array(self.data['ot_capacity']))
-      ot_under = np.maximum(0, np.array(self.data['ot_capacity']) - ot_usage)
-      operational_cost = (
-         self.data['weights']['overtime'] * ot_over.sum() +
-         self.data['weights']['undertime'] * ot_under.sum() +
-         admission_delays
-      )
+      ot_over = np.maximum(0, ot_usage - np.array([spec['OT_availability'] for spec in self.data['specializations']]))
+      ot_under = np.maximum(0, np.array([spec['OT_availability'] for spec in self.data['specializations']]) - ot_usage)
+      
+      ot_over = ot_over * self.data['weights']['overtime']
+      ot_under = ot_under * self.data['weights']['undertime']
+
+      ot_util = ot_over + ot_under
+      
+      operational_cost = ot_util.sum() + admission_delays
 
       # ---- Objective 2: Maximum Workload ----
       workload = np.zeros((self.n_wards, self.n_days))
@@ -63,8 +69,20 @@ class BalancedWorkload(ElementwiseProblem):
 
          for day in range(start_day, start_day + patient['length_of_stay']):
             if day < self.n_days:
-               workload[ward, day] += patient['workload_per_day'][day - start_day]
+               ward_data = self.data['wards'][ward]
+               carryover_workload = ward_data['carryover_workload'][day] if day < len(ward_data['carryover_workload']) else 0
+               if patient['specialization'] in ward_data['minor_specializations']:
+                  spec_idx = self.spec_to_idx[patient['specialization']]
+                  scaling_factor = self.data['specializations'][spec_idx]['scaling_factor']
+                  workload[ward, day] += patient['workload_per_day'][day - start_day] * scaling_factor
+               else:
+                  workload[ward, day] += patient['workload_per_day'][day - start_day]
 
+      for day in range(self.n_days):
+         for ward in range(self.n_wards):
+            ward_data = self.data['wards'][ward]
+            workload[ward, day] += ward_data['carryover_workload'][day]
+      
       max_workload = np.max(workload)
 
       out["F"] = [operational_cost, max_workload]
