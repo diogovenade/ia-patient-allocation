@@ -15,8 +15,7 @@ class BalancedWorkload(ElementwiseProblem):
 
       super().__init__(n_var=2 * n_patients,  # 2 variables per patient: ward and day
                         n_obj=2,  # 2 objectives: operational cost and max workload
-                        n_ieq_constr=0,
-                        n_eq_constr=0,
+                        n_eq_constr=2,  # 2 equality constraints
                         xl=np.zeros(2 * n_patients),  # Ward indices + Days
                         xu=np.concatenate((np.full(n_patients, n_wards - 1), 
                                     np.full(n_patients, n_days - 1))))  # Max bounds
@@ -97,6 +96,48 @@ class BalancedWorkload(ElementwiseProblem):
       out["F"] = [operational_cost, max_workload]
 
       # ---- Constraints ----
+      constraints = np.zeros(2)
+
+      # Constraint 1: Feasibility of ward and day assignments
+      check = 0
+      for i, patient in enumerate(self.data['patients']):
+         ward = ward_assignments[i]
+         day = day_assignments[i]
+
+         ward_data = self.data['wards'][ward]
+         is_feasible_ward = (
+            patient['specialization'] == ward_data['major_specialization'] or
+            patient['specialization'] in ward_data['minor_specializations']
+         )
+
+         is_feasible_day = patient['earliest_admission'] <= day <= patient['latest_admission']
+         
+         if not is_feasible_ward or not is_feasible_day:
+            check = 1
+            break
+      
+      constraints[0] = check
+
+      # Constraint 2: Bed capacity of wards not exceeded
+      bed_capacity_violations = 0
+      for ward in range(self.n_wards):
+         for day in range(self.n_days):
+            assigned_patients = sum(
+               1 for i, patient in enumerate(self.data['patients'])
+               if ward_assignments[i] == ward and day_assignments[i] <= day < day_assignments[i] + patient['length_of_stay']
+            )
+            
+            total_patients = assigned_patients + self.data['wards'][ward]['carryover_patients'][day]
+
+            if total_patients > self.data['wards'][ward]['bed_capacity']:
+               bed_capacity_violations = 1
+               break
+         if bed_capacity_violations:
+            break
+
+      constraints[1] = bed_capacity_violations
+
+      out["H"] = constraints
       
 
 data = ...
