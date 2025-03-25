@@ -70,7 +70,6 @@ class BalancedWorkload(ElementwiseProblem):
          for day in range(start_day, start_day + patient['length_of_stay']):
             if day < self.n_days:
                ward_data = self.data['wards'][ward]
-               carryover_workload = ward_data['carryover_workload'][day] if day < len(ward_data['carryover_workload']) else 0
                if patient['specialization'] in ward_data['minor_specializations']:
                   spec_idx = self.spec_to_idx[patient['specialization']]
                   scaling_factor = self.data['specializations'][spec_idx]['scaling_factor']
