@@ -15,7 +15,8 @@ class BalancedWorkload(ElementwiseProblem):
 
       super().__init__(n_var=2 * n_patients,  # 2 variables per patient: ward and day
                         n_obj=2,  # 2 objectives: operational cost and max workload
-                        n_constr=10,  # 10 constraints
+                        n_ieq_constr=0,
+                        n_eq_constr=0,
                         xl=np.zeros(2 * n_patients),  # Ward indices + Days
                         xu=np.concatenate((np.full(n_patients, n_wards - 1), 
                                     np.full(n_patients, n_days - 1))))  # Max bounds
@@ -77,14 +78,26 @@ class BalancedWorkload(ElementwiseProblem):
                else:
                   workload[ward, day] += patient['workload_per_day'][day - start_day]
 
+      # Carryover workload
       for day in range(self.n_days):
          for ward in range(self.n_wards):
             ward_data = self.data['wards'][ward]
             workload[ward, day] += ward_data['carryover_workload'][day]
-      
-      max_workload = np.max(workload)
+
+      # Normalize the workload
+      normalized_workload = np.zeros((self.n_wards, self.n_days))
+
+      for ward in range(self.n_wards):
+         max_capacity = self.data['wards'][ward]['workload_capacity']  # βw in the formula
+         if max_capacity > 0:
+            normalized_workload[ward, :] = workload[ward, :] / max_capacity
+
+      max_workload = np.max(normalized_workload)
 
       out["F"] = [operational_cost, max_workload]
+
+      # ---- Constraints ----
+      
 
 data = ...
 
