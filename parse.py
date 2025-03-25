@@ -31,7 +31,7 @@ def parse_data(file_path):
             data["weights"]["delay"] = int(line.split(":")[-1].strip())
         elif line.startswith("Days:"):
             data["days"] = int(line.split(":")[-1].strip())
-        elif re.match(r'^[A-Z]{3} \d+\.\d+', line):
+        elif re.match(r'^[A-Z]{3}\t\d+\.\d+', line):
             parts = line.strip().split()
             data["specializations"].append({
                 "id": parts[0],
@@ -54,12 +54,15 @@ def parse_data(file_path):
             "carryover_patients": list(map(int, parts[5].split(';'))),
             "carryover_workload": list(map(float, parts[6].split(';')))
         })
+    
+    
+    specialization_index_map = {spec["id"]: idx for idx, spec in enumerate(data["specializations"])}
 
     for line in lines[patient_start:]:
         parts = line.strip().split()
         data["patients"].append({
             "id": parts[0],
-            "specialization": parts[1],
+            "specialization": specialization_index_map[parts[1]],
             "earliest_admission": int(parts[2]),
             "latest_admission": int(parts[3]),
             "length_of_stay": int(parts[4]),
@@ -74,5 +77,5 @@ data = parse_data("dataset/s0m0.dat")
 
 print(f"Days in planning period: {data['days']}")
 print(f"First ward details: {data['wards'][0]}")
-print(f"First patient details: {data['patients'][0]}")
+print(f"First patient details: {data['patients'][0]['specialization']}")'
 '''
