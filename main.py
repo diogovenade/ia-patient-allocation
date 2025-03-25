@@ -2,9 +2,50 @@ import numpy as np
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.optimize import minimize
+from pymoo.core.crossover import Crossover
 from pymoo.operators.crossover.pntx import PointCrossover
 from pymoo.operators.mutation.pm import PolynomialMutation
 from pymoo.operators.sampling.rnd import FloatRandomSampling
+from parse import parse_data
+
+class TuplePointCrossover(Crossover):
+   def __init__(self, n_points=1, **kwargs):
+      super().__init__(2, 2, **kwargs)
+      self.n_points = n_points
+
+   def _do(self, _, X, **kwargs):
+      # Reshape the solution vector into tuples (w, d)
+      n_var = X.shape[-1]
+      n_tuples = n_var // 2
+      X_tuples = X.reshape(X.shape[0], n_tuples, 2)
+
+      # get the X of parents and count the matings
+      _, n_matings, _ = X_tuples.shape
+
+      # start point of crossover
+      r = np.row_stack([np.random.permutation(n_tuples - 1) + 1 for _ in range(n_matings)])[:, :self.n_points]
+      r.sort(axis=1)
+      r = np.column_stack([r, np.full(n_matings, n_tuples)])
+
+      # the mask do to the crossover
+      M = np.full((n_matings, n_tuples), False)
+
+      # create for each individual the crossover range
+      for i in range(n_matings):
+
+         j = 0
+         while j < r.shape[1] - 1:
+               a, b = r[i, j], r[i, j + 1]
+               M[i, a:b] = True
+               j += 2
+
+      Xp = np.empty_like(X_tuples)
+      for i in range(n_matings):
+         for j in range(2):  # Two parents
+               Xp[j, i, M[i]] = X_tuples[1 - j, i, M[i]]
+               Xp[j, i, ~M[i]] = X_tuples[j, i, ~M[i]]
+
+      return Xp.reshape(X.shape)
 
 class BalancedWorkload(ElementwiseProblem):
    def __init__(self, data):
@@ -140,11 +181,11 @@ class BalancedWorkload(ElementwiseProblem):
       out["H"] = constraints
       
 
-data = ...
+data = parse_data("dataset/s0m0.dat")
 
 algorithm = NSGA2(pop_size=100, 
                   sampling=FloatRandomSampling(),
-                  crossover=PointCrossover(0.9),
+                  crossover=TuplePointCrossover(),
                   mutation=PolynomialMutation(),
                   eliminate_duplicates=True)
 
