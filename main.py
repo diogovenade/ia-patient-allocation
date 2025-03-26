@@ -3,10 +3,37 @@ from pymoo.core.problem import ElementwiseProblem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.optimize import minimize
 from pymoo.core.crossover import Crossover
-from pymoo.operators.crossover.pntx import PointCrossover
-from pymoo.operators.mutation.pm import PolynomialMutation
-from pymoo.operators.sampling.rnd import FloatRandomSampling
+from pymoo.core.mutation import Mutation
+from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from parse import parse_data
+from pymoo.core.repair import Repair
+from pymoo.visualization.scatter import Scatter
+import matplotlib
+
+
+class WardAssignmentRepair(Repair):
+    def _do(self, problem, X, **kwargs):
+        n_patients = problem.n_patients
+        for i in range(X.shape[0]):  # For each solution in the population
+            for j in range(n_patients):
+                # Repair ward assignment
+                ward = int(X[i, j])
+                patient = problem.data['patients'][j]
+                ward_data = problem.data['wards'][ward]
+                if not (patient['specialization'] == ward_data['major_specialization'] or 
+                        patient['specialization'] in ward_data['minor_specializations']):
+                    valid_wards = [k for k, wd in enumerate(problem.data['wards'])
+                                   if patient['specialization'] == wd['major_specialization'] or 
+                                   patient['specialization'] in wd['minor_specializations']]
+                    if valid_wards:
+                        X[i, j] = np.random.choice(valid_wards)
+                        
+                # Repair day assignment
+                day_index = problem.n_patients + j
+                day = int(X[i, day_index])
+                if day < patient['earliest_admission'] or day > patient['latest_admission']:
+                    X[i, day_index] = np.random.randint(patient['earliest_admission'], patient['latest_admission'] + 1)
+        return X
 
 class TuplePointCrossover(Crossover):
    def __init__(self, n_points=1, **kwargs):
@@ -14,38 +41,57 @@ class TuplePointCrossover(Crossover):
       self.n_points = n_points
 
    def _do(self, _, X, **kwargs):
+
       # Reshape the solution vector into tuples (w, d)
       n_var = X.shape[-1]
       n_tuples = n_var // 2
-      X_tuples = X.reshape(X.shape[0], n_tuples, 2)
 
-      # get the X of parents and count the matings
-      _, n_matings, _ = X_tuples.shape
+      # Adjust for the extra dimension (population size)
+      n_parents, n_individuals, _ = X.shape
+      X_tuples = X.reshape(n_parents, n_individuals, n_tuples, 2)
 
-      # start point of crossover
+      # Get the X of parents and count the matings
+      _, n_matings, _, _ = X_tuples.shape
+
+      # Start point of crossover
       r = np.row_stack([np.random.permutation(n_tuples - 1) + 1 for _ in range(n_matings)])[:, :self.n_points]
       r.sort(axis=1)
       r = np.column_stack([r, np.full(n_matings, n_tuples)])
 
-      # the mask do to the crossover
+      # The mask to do the crossover
       M = np.full((n_matings, n_tuples), False)
 
-      # create for each individual the crossover range
+      # Create for each individual the crossover range
       for i in range(n_matings):
-
          j = 0
          while j < r.shape[1] - 1:
-               a, b = r[i, j], r[i, j + 1]
-               M[i, a:b] = True
-               j += 2
+            a, b = r[i, j], r[i, j + 1]
+            M[i, a:b] = True
+            j += 2
 
       Xp = np.empty_like(X_tuples)
       for i in range(n_matings):
          for j in range(2):  # Two parents
-               Xp[j, i, M[i]] = X_tuples[1 - j, i, M[i]]
-               Xp[j, i, ~M[i]] = X_tuples[j, i, ~M[i]]
+            Xp[j, i, M[i]] = X_tuples[1 - j, i, M[i]]
+            Xp[j, i, ~M[i]] = X_tuples[j, i, ~M[i]]
 
       return Xp.reshape(X.shape)
+
+class AdmissionDayMutation(Mutation):
+   def _do(self, problem, X, **kwargs):
+      for i in range(len(X)):
+         patient_idx = np.random.randint(0, problem.n_patients)
+         
+         patient = problem.data['patients'][patient_idx]
+         earliest = patient['earliest_admission']
+         latest = patient['latest_admission']
+         
+         # Randomly select a new day within the time window
+         new_day = np.random.randint(earliest, latest + 1)
+         
+         X[i, problem.n_patients + patient_idx] = new_day
+      
+      return X
 
 class BalancedWorkload(ElementwiseProblem):
    def __init__(self, data):
@@ -56,10 +102,11 @@ class BalancedWorkload(ElementwiseProblem):
 
       super().__init__(n_var=2 * n_patients,  # 2 variables per patient: ward and day
                         n_obj=2,  # 2 objectives: operational cost and max workload
-                        n_eq_constr=2,  # 2 equality constraints
+                        n_eq_constr=1,  # 1 equality constraint
                         xl=np.zeros(2 * n_patients),  # Ward indices + Days
                         xu=np.concatenate((np.full(n_patients, n_wards - 1), 
-                                    np.full(n_patients, n_days - 1))))  # Max bounds
+                                    np.full(n_patients, n_days - 1))),  # Max bounds
+                        vtype=int)
       self.data = data
       self.n_patients = n_patients
       self.n_wards = n_wards
@@ -137,8 +184,9 @@ class BalancedWorkload(ElementwiseProblem):
       out["F"] = [operational_cost, max_workload]
 
       # ---- Constraints ----
-      constraints = np.zeros(2)
+      #constraints = np.zeros(2)
 
+      '''
       # Constraint 1: Feasibility of ward and day assignments
       check = 0
       for i, patient in enumerate(self.data['patients']):
@@ -146,21 +194,31 @@ class BalancedWorkload(ElementwiseProblem):
          day = day_assignments[i]
 
          ward_data = self.data['wards'][ward]
+
+         #print("Patient specialization: ", patient['specialization'])
+         #print("Ward specialization: ", ward_data['major_specialization'])
+         #print("Minor specializations: ", ward_data['minor_specializations'])
+
          is_feasible_ward = (
             patient['specialization'] == ward_data['major_specialization'] or
             patient['specialization'] in ward_data['minor_specializations']
          )
 
-         is_feasible_day = patient['earliest_admission'] <= day <= patient['latest_admission']
+         #print ("Feasible Ward: ", is_feasible_ward)
+
+         is_feasible_day = patient['earliest_admission'] <= day <= patient['latest_admission']         
          
+         #print("Feasible Day: ", is_feasible_day)
+
          if not is_feasible_ward or not is_feasible_day:
             check = 1
             break
       
-      constraints[0] = check
+      constraints[0] = check'
+      '''
 
-      # Constraint 2: Bed capacity of wards not exceeded
-      bed_capacity_violations = 0
+      # Bed capacity of wards not exceeded
+      bed_capacity_violation = 0
       for ward in range(self.n_wards):
          for day in range(self.n_days):
             assigned_patients = sum(
@@ -170,27 +228,53 @@ class BalancedWorkload(ElementwiseProblem):
             
             total_patients = assigned_patients + self.data['wards'][ward]['carryover_patients'][day]
 
+            #print("Total patients: ", total_patients)
+            #print("Bed capacity: ", self.data['wards'][ward]['bed_capacity'])
+
             if total_patients > self.data['wards'][ward]['bed_capacity']:
-               bed_capacity_violations = 1
+               bed_capacity_violation = 1
                break
-         if bed_capacity_violations:
+         if bed_capacity_violation:
             break
 
-      constraints[1] = bed_capacity_violations
+      #constraints[1] = bed_capacity_violation
 
-      out["H"] = constraints
+      #print("Ward violation: ", constraints[0])
+      #print("Bed violation: ", constraints[1])
+
+      out["H"] = bed_capacity_violation
       
 
-data = parse_data("dataset/s0m0.dat")
+data = parse_data("dataset/s13m0.dat")
+
+matplotlib.use('TkAgg')
+print("Active matplotlib backend:", matplotlib.get_backend())
 
 algorithm = NSGA2(pop_size=100, 
-                  sampling=FloatRandomSampling(),
+                  sampling=IntegerRandomSampling(),
                   crossover=TuplePointCrossover(),
-                  mutation=PolynomialMutation(),
-                  eliminate_duplicates=True)
+                  mutation=AdmissionDayMutation(),
+                  eliminate_duplicates=True,
+                  repair=WardAssignmentRepair())
 
 result = minimize(BalancedWorkload(data),
                   algorithm,
                   termination=('n_gen', 200),
                   seed=1,
                   verbose=True)
+
+
+# Print the solutions (ward and day assignments)
+print("Solutions (ward and day assignments):")
+for i, solution in enumerate(result.X):
+    print(f"Solution {i + 1}:")
+    n_patients = len(solution) // 2
+    ward_assignments = solution[:n_patients].astype(int)
+    day_assignments = solution[n_patients:].astype(int)
+    for j in range(n_patients):
+        print(f"  Patient {j + 1}: Ward {ward_assignments[j]}, Day {day_assignments[j]}")
+
+plot = Scatter()
+plot.add(result.problem.pareto_front(), plot_type="line", color="black", alpha=0.7)
+plot.add(result.F, facecolor="none", edgecolor="red")
+plot.show()
