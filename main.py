@@ -10,29 +10,90 @@ from pymoo.core.repair import Repair
 from pymoo.visualization.scatter import Scatter
 import matplotlib
 
-
-class WardAssignmentRepair(Repair):
+class RepairOperator(Repair):
     def _do(self, problem, X, **kwargs):
         n_patients = problem.n_patients
-        for i in range(X.shape[0]):  # For each solution in the population
+        n_wards = problem.n_wards
+        n_days = problem.n_days
+
+        for i in range(X.shape[0]):
+            ward_assignments = X[i, :n_patients].astype(int)
+            day_assignments = X[i, n_patients:].astype(int)
+
+            bed_usage = np.zeros((n_wards, n_days), dtype=int)
+
             for j in range(n_patients):
-                # Repair ward assignment
-                ward = int(X[i, j])
+                ward = ward_assignments[j]
+                start_day = day_assignments[j]
                 patient = problem.data['patients'][j]
+
+                # Check if the ward assignment is valid
                 ward_data = problem.data['wards'][ward]
-                if not (patient['specialization'] == ward_data['major_specialization'] or 
-                        patient['specialization'] in ward_data['minor_specializations']):
-                    valid_wards = [k for k, wd in enumerate(problem.data['wards'])
-                                   if patient['specialization'] == wd['major_specialization'] or 
-                                   patient['specialization'] in wd['minor_specializations']]
+                if not (
+                    patient['specialization'] == ward_data['major_specialization'] or
+                    patient['specialization'] in ward_data['minor_specializations']
+                ):
+                    # Reassign to a valid ward
+                    valid_wards = [
+                        k for k, wd in enumerate(problem.data['wards'])
+                        if patient['specialization'] == wd['major_specialization'] or
+                        patient['specialization'] in wd['minor_specializations']
+                    ]
                     if valid_wards:
-                        X[i, j] = np.random.choice(valid_wards)
-                        
-                # Repair day assignment
-                day_index = problem.n_patients + j
-                day = int(X[i, day_index])
-                if day < patient['earliest_admission'] or day > patient['latest_admission']:
-                    X[i, day_index] = np.random.randint(patient['earliest_admission'], patient['latest_admission'] + 1)
+                        ward_assignments[j] = np.random.choice(valid_wards)
+                    else:
+                        continue
+
+                # Check if the day assignment is valid
+                if not (patient['earliest_admission'] <= start_day <= patient['latest_admission']):
+                    # Reassign to a valid day within the admission window
+                    day_assignments[j] = np.random.randint(
+                        patient['earliest_admission'], patient['latest_admission'] + 1
+                    )
+
+                # Update bed usage
+                for day in range(start_day, start_day + patient['length_of_stay']):
+                    if day < n_days:
+                        bed_usage[ward_assignments[j], day] += 1
+
+            # Repair bed capacity violations
+            for ward in range(n_wards):
+                for day in range(n_days):
+                    while bed_usage[ward, day] > problem.data['wards'][ward]['bed_capacity']:
+                        # Find a patient to reassign
+                        for j in range(n_patients):
+                            if ward_assignments[j] == ward and day_assignments[j] <= day < day_assignments[j] + problem.data['patients'][j]['length_of_stay']:
+                                # Try to reassign the patient to another ward
+                                valid_wards = [
+                                    k for k, wd in enumerate(problem.data['wards'])
+                                    if problem.data['patients'][j]['specialization'] == wd['major_specialization'] or
+                                    problem.data['patients'][j]['specialization'] in wd['minor_specializations']
+                                ]
+                                valid_wards = [k for k in valid_wards if k != ward]  # Exclude the current ward
+                                if valid_wards:
+                                    new_ward = np.random.choice(valid_wards)
+                                    ward_assignments[j] = new_ward
+                                    for d in range(day_assignments[j], day_assignments[j] + problem.data['patients'][j]['length_of_stay']):
+                                        if d < n_days:
+                                            bed_usage[ward, d] -= 1
+                                            bed_usage[new_ward, d] += 1
+                                    break
+                                else:
+                                    # If no valid ward is found, adjust the admission day
+                                    new_day = np.random.randint(problem.data['patients'][j]['earliest_admission'], problem.data['patients'][j]['latest_admission'] + 1)
+                                    for d in range(day_assignments[j], day_assignments[j] + problem.data['patients'][j]['length_of_stay']):
+                                        if d < n_days:
+                                            bed_usage[ward, d] -= 1
+                                    day_assignments[j] = new_day
+                                    for d in range(new_day, new_day + problem.data['patients'][j]['length_of_stay']):
+                                        if d < n_days:
+                                            bed_usage[ward, d] += 1
+                                    break
+
+            # Update the solution
+            X[i, :n_patients] = ward_assignments
+            X[i, n_patients:] = day_assignments
+
         return X
 
 class TuplePointCrossover(Crossover):
@@ -102,7 +163,7 @@ class BalancedWorkload(ElementwiseProblem):
 
       super().__init__(n_var=2 * n_patients,  # 2 variables per patient: ward and day
                         n_obj=2,  # 2 objectives: operational cost and max workload
-                        n_eq_constr=1,  # 1 equality constraint
+                        n_eq_constr=2,  # 1 equality constraint
                         xl=np.zeros(2 * n_patients),  # Ward indices + Days
                         xu=np.concatenate((np.full(n_patients, n_wards - 1), 
                                     np.full(n_patients, n_days - 1))),  # Max bounds
@@ -184,9 +245,8 @@ class BalancedWorkload(ElementwiseProblem):
       out["F"] = [operational_cost, max_workload]
 
       # ---- Constraints ----
-      #constraints = np.zeros(2)
+      constraints = np.zeros(2)
 
-      '''
       # Constraint 1: Feasibility of ward and day assignments
       check = 0
       for i, patient in enumerate(self.data['patients']):
@@ -214,8 +274,7 @@ class BalancedWorkload(ElementwiseProblem):
             check = 1
             break
       
-      constraints[0] = check'
-      '''
+      constraints[0] = check
 
       # Bed capacity of wards not exceeded
       bed_capacity_violation = 0
@@ -237,15 +296,15 @@ class BalancedWorkload(ElementwiseProblem):
          if bed_capacity_violation:
             break
 
-      #constraints[1] = bed_capacity_violation
+      constraints[1] = bed_capacity_violation
 
       #print("Ward violation: ", constraints[0])
       #print("Bed violation: ", constraints[1])
 
-      out["H"] = bed_capacity_violation
+      out["H"] = constraints
       
 
-data = parse_data("dataset/s13m0.dat")
+data = parse_data("dataset/s0m0.dat")
 
 matplotlib.use('TkAgg')
 print("Active matplotlib backend:", matplotlib.get_backend())
@@ -255,7 +314,7 @@ algorithm = NSGA2(pop_size=100,
                   crossover=TuplePointCrossover(),
                   mutation=AdmissionDayMutation(),
                   eliminate_duplicates=True,
-                  repair=WardAssignmentRepair())
+                  repair=RepairOperator())
 
 result = minimize(BalancedWorkload(data),
                   algorithm,
