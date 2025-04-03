@@ -352,7 +352,7 @@ def run():
     print("Active matplotlib backend:", matplotlib.get_backend())
     
     # Parse data and create problem instance
-    data = parse_data("dataset/s13m0.dat")
+    data = parse_data("dataset/s35m0.dat")
     problem = PatientSchedulingProblem(data)
     
     print("Problem created successfully.")
@@ -365,7 +365,7 @@ def run():
         problem=problem,
         temperature=100.0,         # Lower initial temperature 
         cooling_rate=0.995,        # Much slower cooling rate
-        n_iterations=10000         # More iterations
+        n_iterations=3000         # More iterations
     )
     
     # Run optimization
