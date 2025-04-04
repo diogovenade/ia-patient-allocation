@@ -48,8 +48,21 @@ class PatientSchedulingProblem:
         ot_under = ot_under * self.data['weights']['undertime']
 
         ot_util = ot_over + ot_under
+
+        bed_capacity_violations = 0
+        for ward in range(self.n_wards):
+            for day in range(self.n_days):
+                assigned_patients = sum(
+                    1 for i, patient in enumerate(self.data['patients'])
+                    if ward_assignments[i] == ward and day_assignments[i] <= day < day_assignments[i] + patient['length_of_stay']
+                )
+                
+                total_patients = assigned_patients + self.data['wards'][ward]['carryover_patients'][day]
+
+                if total_patients > self.data['wards'][ward]['bed_capacity']:
+                    bed_capacity_violations += total_patients - self.data['wards'][ward]['bed_capacity']
         
-        operational_cost = ot_util.sum() + admission_delays
+        operational_cost = ot_util.sum() + admission_delays + bed_capacity_violations
 
         # ---- Objective 2: Maximum Workload ----
         workload = np.zeros((self.n_wards, self.n_days))
@@ -86,26 +99,26 @@ class PatientSchedulingProblem:
 
         out["F"] = [operational_cost, max_workload]
 
-        # ---- Constraints ----
-        # Bed capacity of wards not exceeded
-        bed_capacity_violation = 0
-        for ward in range(self.n_wards):
-            for day in range(self.n_days):
-                assigned_patients = sum(
-                    1 for i, patient in enumerate(self.data['patients'])
-                    if ward_assignments[i] == ward and day_assignments[i] <= day < day_assignments[i] + patient['length_of_stay']
-                )
-                
-                total_patients = assigned_patients + self.data['wards'][ward]['carryover_patients'][day]
+        # Constraint: Feasibility of ward and day assignments
+        unfeasible = 0
+        for i, patient in enumerate(self.data['patients']):
+            ward = ward_assignments[i]
+            day = day_assignments[i]
 
-                if total_patients > self.data['wards'][ward]['bed_capacity']:
-                    bed_capacity_violation = 1
-                    break
-            if bed_capacity_violation:
+            ward_data = self.data['wards'][ward]
+
+            is_feasible_ward = (
+                patient['specialization'] == ward_data['major_specialization'] or
+                patient['specialization'] in ward_data['minor_specializations']
+            )
+
+            is_feasible_day = patient['earliest_admission'] <= day <= patient['latest_admission']         
+
+            if not is_feasible_ward or not is_feasible_day:
+                unfeasible = 1
                 break
 
-        out["H"] = bed_capacity_violation
-        return out
+        out["H"] = unfeasible
 
 
 class ParetoSimulatedAnnealing:
@@ -126,8 +139,12 @@ class ParetoSimulatedAnnealing:
                     patient['latest_admission']
                 ) for patient in problem.data['patients']])
             ))
+            # Repair the initial solution to ensure feasibility
+            self.repair_solution(self.current_solution)
         else:
             self.current_solution = initial_solution
+            # Repair the provided initial solution (if any)
+            self.repair_solution(self.current_solution)
             
         self.temperature = temperature
         self.cooling_rate = cooling_rate
@@ -146,6 +163,31 @@ class ParetoSimulatedAnnealing:
             if f1 < f2:
                 better_in_any = True
         return better_in_any
+    
+    def repair_solution(self, solution):
+        """Repair a solution to ensure it respects ward and day feasibility constraints."""
+        n_patients = self.problem.n_patients
+        ward_assignments = solution[:n_patients]
+        day_assignments = solution[n_patients:]
+
+        for i, patient in enumerate(self.problem.data['patients']):
+            # Repair ward assignment
+            valid_wards = [
+                ward_idx for ward_idx, ward in enumerate(self.problem.data['wards'])
+                if patient['specialization'] == ward['major_specialization'] or
+                   patient['specialization'] in ward['minor_specializations']
+            ]
+            if ward_assignments[i] not in valid_wards:
+                ward_assignments[i] = random.choice(valid_wards)
+
+            # Repair day assignment
+            earliest = patient['earliest_admission']
+            latest = patient['latest_admission']
+            if not (earliest <= day_assignments[i] <= latest):
+                day_assignments[i] = random.randint(earliest, latest)
+
+        solution[:n_patients] = ward_assignments
+        solution[n_patients:] = day_assignments
     
     def evaluate_solution(self, solution):
         """Evaluate solution using the problem's _evaluate method"""
@@ -352,7 +394,7 @@ def run():
     print("Active matplotlib backend:", matplotlib.get_backend())
     
     # Parse data and create problem instance
-    data = parse_data("dataset/s35m0.dat")
+    data = parse_data("dataset/s1m0.dat")
     problem = PatientSchedulingProblem(data)
     
     print("Problem created successfully.")
