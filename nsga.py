@@ -8,6 +8,7 @@ from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from parse import parse_data
 from pymoo.core.repair import Repair
 from pymoo.visualization.scatter import Scatter
+from pymoo.termination.default import DefaultMultiObjectiveTermination
 import matplotlib
 
 class RepairOperator(Repair):
@@ -256,7 +257,7 @@ algorithm = NSGA2(pop_size=100,
 
 result = minimize(BalancedWorkload(data),
                   algorithm,
-                  termination=('n_gen', 30),
+                  termination=DefaultMultiObjectiveTermination(),
                   seed=1,
                   verbose=True)
 
