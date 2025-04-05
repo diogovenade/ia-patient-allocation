@@ -707,8 +707,20 @@ class OptimizationApp:
         # Add summary information
         self.solution_text.insert(tk.END, f"Dataset: {self.dataset_path.get().split('/')[-1]}\n")
         self.solution_text.insert(tk.END, f"Execution Time: {execution_time:.2f} seconds\n")
-        self.solution_text.insert(tk.END, f"Generations: {result.algorithm.n_gen}\n")
-        self.solution_text.insert(tk.END, f"Population Size: {self.population_size.get()}\n")
+        
+        # Get selected algorithm type
+        algorithm_type = self.algorithm.get()
+        
+        if algorithm_type == "NSGA2":
+            # NSGA-II specific information
+            self.solution_text.insert(tk.END, f"Generations: {result.algorithm.n_gen}\n")
+            self.solution_text.insert(tk.END, f"Population Size: {self.population_size.get()}\n")
+        else:  # PSA
+            # PSA specific information
+            self.solution_text.insert(tk.END, f"Iterations: {self.iterations.get()}\n")
+            self.solution_text.insert(tk.END, f"Initial Temp: {self.initial_temp.get()}\n")
+            self.solution_text.insert(tk.END, f"Cooling Rate: {self.cooling_rate.get()}\n")
+        
         self.solution_text.insert(tk.END, f"Number of Solutions: {len(result.X)}\n\n")
         
         # Display top solutions
@@ -743,8 +755,12 @@ class OptimizationApp:
             # Create detailed text report
             with open(file_path, 'w') as f:
                 # Header information
+                algorithm_type = self.algorithm.get()
                 f.write("=================================================\n")
-                f.write("NSGA-II Patient Scheduling Optimization Results\n")
+                if algorithm_type == "NSGA2":
+                    f.write("NSGA-II Patient Scheduling Optimization Results\n")
+                else:
+                    f.write("Pareto Simulated Annealing Optimization Results\n")
                 f.write("=================================================\n\n")
                 
                 # Date and time
@@ -756,9 +772,16 @@ class OptimizationApp:
                 
                 # Algorithm parameters
                 f.write("\nAlgorithm Parameters:\n")
-                f.write(f"- Population Size: {self.population_size.get()}\n")
-                f.write(f"- Max Generations: {self.max_generations.get()}\n")
-                f.write(f"- Mutation Probability: {self.mutation_prob.get()}\n")
+                if algorithm_type == "NSGA2":
+                    f.write(f"- Algorithm: NSGA-II\n")
+                    f.write(f"- Population Size: {self.population_size.get()}\n")
+                    f.write(f"- Max Generations: {self.max_generations.get()}\n")
+                    f.write(f"- Mutation Probability: {self.mutation_prob.get()}\n")
+                else:
+                    f.write(f"- Algorithm: Pareto Simulated Annealing\n")
+                    f.write(f"- Initial Temperature: {self.initial_temp.get()}\n")
+                    f.write(f"- Cooling Rate: {self.cooling_rate.get()}\n")
+                    f.write(f"- Total Iterations: {self.iterations.get()}\n")
                 
                 # Get the latest optimization result from solution history
                 if hasattr(self, 'last_result') and self.last_result is not None:
@@ -768,14 +791,21 @@ class OptimizationApp:
                     # Execution information
                     f.write("\nExecution Information:\n")
                     f.write(f"- Total Execution Time: {exec_time:.2f} seconds\n")
-                    f.write(f"- Completed Generations: {result.algorithm.n_gen}\n")
+                    
+                    if algorithm_type == "NSGA2":
+                        f.write(f"- Completed Generations: {result.algorithm.n_gen}\n")
+                    else:
+                        f.write(f"- Completed Iterations: {result.algorithm.n_gen}\n")
+                        f.write(f"- Final Temperature: {self.initial_temp.get() * (self.cooling_rate.get() ** result.algorithm.n_gen):.6f}\n")
+                    
                     f.write(f"- Number of Solutions: {len(result.X)}\n")
                     f.write(f"- Success: {result.success}\n")
                     
                     # Algorithm convergence information
-                    f.write("\nConvergence Information:\n")
-                    if hasattr(result, "message"):
-                        f.write(f"- Termination message: {result.message}\n")
+                    if algorithm_type == "NSGA2":
+                        f.write("\nConvergence Information:\n")
+                        if hasattr(result, "message"):
+                            f.write(f"- Termination message: {result.message}\n")
                     
                     # Pareto front details
                     f.write("\nPareto Front Solutions:\n")
@@ -789,9 +819,16 @@ class OptimizationApp:
                         f.write(f"{i+1:3d}. {result.F[idx, 0]:20.4f} {result.F[idx, 1]:20.4f}\n")
                     
                     # Evolution history summary
-                    f.write("\nEvolution History:\n")
+                    if algorithm_type == "NSGA2":
+                        history_label = "Evolution History"
+                        iteration_label = "Gen"
+                    else:
+                        history_label = "Optimization Progress"
+                        iteration_label = "Iter"
+                    
+                    f.write(f"\n{history_label}:\n")
                     f.write("---------------------------------------------------\n")
-                    f.write("Gen    Min Cost    Max Cost    Min Workload    Max Workload\n")
+                    f.write(f"{iteration_label}    Min Cost    Max Cost    Min Workload    Max Workload\n")
                     f.write("---------------------------------------------------\n")
                     
                     # Extract data from the solution history
@@ -859,11 +896,11 @@ class OptimizationApp:
                     # Basic information from solution history
                     latest = self.solution_history[-1]
                     gen = latest['generation']
-                    f.write(f"\nReached generation {gen}\n")
+                    f.write(f"\nReached {iteration_label.lower()} {gen}\n")
                     
                     if 'objectives' in latest and latest['objectives']:
                         objectives = np.array(latest['objectives'])
-                        f.write(f"Final generation solutions: {len(objectives)}\n")
+                        f.write(f"Final solutions: {len(objectives)}\n")
                         f.write(f"Operational cost range: {np.min(objectives[:, 0]):.2f} - {np.max(objectives[:, 0]):.2f}\n")
                         f.write(f"Maximum workload range: {np.min(objectives[:, 1]):.4f} - {np.max(objectives[:, 1]):.4f}\n")
                 
