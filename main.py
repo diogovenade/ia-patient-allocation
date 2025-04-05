@@ -85,7 +85,7 @@ class NSGAOptimizationApp:
         # Run button
         self.run_button = ttk.Button(buttons_frame, text="Run Algorithm", command=self.run_algorithm)
         self.run_button.pack(side=tk.LEFT, padx=5)
-        
+
         # Save results button
         self.save_button = ttk.Button(buttons_frame, text="Save Results", command=self.save_results)
         self.save_button.pack(side=tk.LEFT, padx=5)
@@ -103,9 +103,13 @@ class NSGAOptimizationApp:
         self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
         self.status_label.pack(fill=tk.X, padx=5, pady=5)
         
-        # Solution info frame
-        solution_frame = ttk.LabelFrame(left_panel, text="Solution Information")
-        solution_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Create a notebook for tabbed display in the left panel
+        self.notebook = ttk.Notebook(left_panel)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Solution info tab
+        solution_frame = ttk.Frame(self.notebook)
+        self.notebook.add(solution_frame, text="Summary")
         
         # Create a Text widget for the solution details
         self.solution_text = tk.Text(solution_frame, wrap=tk.WORD, height=10, width=30)
@@ -113,6 +117,28 @@ class NSGAOptimizationApp:
         self.solution_text.config(yscrollcommand=solution_scroll.set)
         self.solution_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         solution_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+        
+        # Solution viewer tab for browsing solutions
+        viewer_frame = ttk.Frame(self.notebook)
+        self.notebook.add(viewer_frame, text="Solutions")
+        
+        # Solution selector frame
+        selector_frame = ttk.Frame(viewer_frame)
+        selector_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Solution selector dropdown
+        ttk.Label(selector_frame, text="Solution:").pack(side=tk.LEFT, padx=5)
+        self.solution_idx = tk.IntVar(value=0)
+        self.solution_selector = ttk.Combobox(selector_frame, textvariable=self.solution_idx, state='readonly')
+        self.solution_selector.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.solution_selector.bind('<<ComboboxSelected>>', self.on_solution_selected)
+        
+        # Solution details text widget
+        self.solution_details = tk.Text(viewer_frame, wrap=tk.WORD, height=20)
+        details_scroll = ttk.Scrollbar(viewer_frame, command=self.solution_details.yview)
+        self.solution_details.config(yscrollcommand=details_scroll.set)
+        self.solution_details.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        details_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
         
         # Right panel - Visualization
         viz_frame = ttk.LabelFrame(right_panel, text="Visualization")
@@ -136,6 +162,79 @@ class NSGAOptimizationApp:
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
     
+    def on_solution_selected(self, event=None):
+        """Handle the selection of a solution from the dropdown"""
+        if not hasattr(self, 'last_result') or self.last_result is None:
+            return
+        
+        # Get the selected solution index
+        try:
+            # Get the index from the combobox directly, not from the IntVar
+            dropdown_idx = self.solution_selector.current()
+            
+            # If a valid selection is made
+            if dropdown_idx >= 0:
+                # Get the actual index in the result array (sorted by cost)
+                sorted_idx = np.argsort(self.last_result.F[:, 0])
+                solution_idx = sorted_idx[dropdown_idx]
+                
+                # Display the selected solution
+                self.display_solution_details(solution_idx)
+        except Exception as e:
+            self.solution_details.delete(1.0, tk.END)
+            self.solution_details.insert(tk.END, f"Error displaying solution: {str(e)}")
+    
+    def display_solution_details(self, solution_idx):
+        """Display detailed information about the selected solution"""
+        if not hasattr(self, 'last_result') or self.last_result is None:
+            return
+        
+        # Get the solution data
+        solution = self.last_result.X[solution_idx]
+        objectives = self.last_result.F[solution_idx]
+        
+        # Clear the text widget
+        self.solution_details.delete(1.0, tk.END)
+        
+        # Add solution header
+        self.solution_details.insert(tk.END, f"Solution {solution_idx+1} Details\n")
+        self.solution_details.insert(tk.END, f"{'='*40}\n\n")
+        
+        # Objective values
+        self.solution_details.insert(tk.END, f"Operational Cost: {objectives[0]:.2f}\n")
+        self.solution_details.insert(tk.END, f"Maximum Workload: {objectives[1]:.4f}\n\n")
+        
+        # Extract ward and day assignments
+        n_patients = len(self.last_result.problem.data['patients'])
+        ward_assignments = solution[:n_patients].astype(int)
+        day_assignments = solution[n_patients:].astype(int)
+        
+        # Add patient assignments table header
+        self.solution_details.insert(tk.END, "Patient Assignments:\n")
+        self.solution_details.insert(tk.END, f"{'='*40}\n")
+        self.solution_details.insert(tk.END, f"{'PatID':<6} {'Spec':<6} {'Ward':<6} {'Day':<4} {'LOS':<4} {'Delay':<5}\n")
+        self.solution_details.insert(tk.END, f"{'-'*40}\n")
+        
+        # Add each patient's assignments
+        for i, patient in enumerate(self.last_result.problem.data['patients']):
+            ward_idx = ward_assignments[i]
+            ward = self.last_result.problem.data['wards'][ward_idx]
+            day = day_assignments[i]
+            
+            # Calculate delay
+            delay = max(0, day - patient['earliest_admission'])
+            
+            # Only show first 20 patients to avoid flooding the UI
+            if i < 20:
+                self.solution_details.insert(
+                    tk.END, 
+                    f"{patient['id']:<6} {patient['specialization']:<6} {ward['id']:<6} "
+                    f"{day:<4} {patient['length_of_stay']:<4} {delay:<5}\n"
+                )
+        
+        if n_patients > 20:
+            self.solution_details.insert(tk.END, "... (more patients not shown - save for complete results)\n")
+
     def run_algorithm(self):
         """Start the algorithm in a separate thread"""
         if self.running:
@@ -458,6 +557,21 @@ class NSGAOptimizationApp:
         
         # Redraw the canvas
         self.canvas.draw()
+        
+        # Update the solution selector
+        if result.F is not None and len(result.F) > 0:
+            # Create solution options for the dropdown
+            sorted_idx = np.argsort(result.F[:, 0])
+            options = []
+            for i, idx in enumerate(sorted_idx):
+                options.append(f"#{i+1}: Cost={result.F[idx, 0]:.2f}, WL={result.F[idx, 1]:.4f}")
+            
+            self.solution_selector['values'] = options
+            
+            # Select the first (best) solution
+            if options:
+                self.solution_selector.current(0)
+                self.on_solution_selected()
     
     def update_solution_text(self, result, execution_time):
         """Update the solution text widget with results"""
@@ -472,7 +586,14 @@ class NSGAOptimizationApp:
         
         # Display top solutions
         self.solution_text.insert(tk.END, "Top Solutions (Objective Values):\n")
-        for i, obj in enumerate(result.F[:min(5, len(result.F))]):
+        
+        # Sort by first objective (operational cost)
+        sorted_idx = np.argsort(result.F[:, 0])
+        
+        # Display top 5 solutions or fewer if there are less
+        for i in range(min(5, len(sorted_idx))):
+            idx = sorted_idx[i]
+            obj = result.F[idx]
             self.solution_text.insert(tk.END, f"{i+1}. Cost: {obj[0]:.2f}, Workload: {obj[1]:.4f}\n")
     
     def save_results(self):
@@ -536,10 +657,9 @@ class NSGAOptimizationApp:
                     f.write("---------------------------------------------------\n")
                     
                     # Sort solutions by operational cost
-                    if result.F is not None and len(result.F) > 0:
-                        sorted_idx = np.argsort(result.F[:, 0])
-                        for i, idx in enumerate(sorted_idx):
-                            f.write(f"{i+1:3d}. {result.F[idx, 0]:20.4f} {result.F[idx, 1]:20.4f}\n")
+                    sorted_idx = np.argsort(result.F[:, 0])
+                    for i, idx in enumerate(sorted_idx):
+                        f.write(f"{i+1:3d}. {result.F[idx, 0]:20.4f} {result.F[idx, 1]:20.4f}\n")
                     
                     # Evolution history summary
                     f.write("\nEvolution History:\n")
@@ -558,21 +678,56 @@ class NSGAOptimizationApp:
                             max_workload = np.max(objs[:, 1])
                             
                             f.write(f"{gen:3d}  {min_cost:10.2f}  {max_cost:10.2f}  {min_workload:13.4f}  {max_workload:13.4f}\n")
+
                     
-                    # Problem constraints
-                    f.write("\nConstraint Violations in Final Population:\n")
-                    if hasattr(result, "CV") and result.CV is not None:
-                        # Count solutions with no constraint violations
-                        feasible_count = np.sum(np.all(result.CV <= 0, axis=1))
-                        f.write(f"Feasible solutions: {feasible_count} of {len(result.X)} ({feasible_count/len(result.X)*100:.1f}%)\n")
+                    # Loop through all Pareto front solutions
+                    f.write("\n=================================================\n")
+                    f.write("DETAILED SOLUTIONS INFORMATION\n")
+                    f.write("=================================================\n")
+                    
+                    # Get number of patients for extraction
+                    n_patients = len(result.problem.data['patients'])
+                    
+                    # Loop through all solutions
+                    for i, sol_idx in enumerate(sorted_idx):
+                        solution = result.X[sol_idx]
+                        objectives = result.F[sol_idx]
                         
-                        # Average constraint violation
-                        if len(result.CV) > 0:
-                            avg_violation = np.mean(np.sum(np.maximum(0, result.CV), axis=1))
-                            f.write(f"Average constraint violation: {avg_violation:.6f}\n")
-                    else:
-                        f.write("No constraint violation data available.\n")
-                
+                        f.write(f"\n\n--------------------- SOLUTION #{i+1} ---------------------\n")
+                        f.write(f"Operational Cost: {objectives[0]:.2f}\n")
+                        f.write(f"Maximum Workload: {objectives[1]:.4f}\n\n")
+                        
+                        # Extract ward and day assignments for this solution
+                        ward_assignments = solution[:n_patients].astype(int)
+                        day_assignments = solution[n_patients:].astype(int)
+                        
+                        # Add patient assignments table header
+                        f.write("Patient Assignments:\n")
+                        f.write(f"{'='*40}\n")
+                        f.write(f"{'PatID':<6} {'Spec':<6} {'Ward':<6} {'Day':<4} {'LOS':<4} {'Delay':<5}\n")
+                        f.write(f"{'-'*40}\n")
+                        
+                        # Variables to track statistics
+                        total_delay = 0
+                        ward_usage = np.zeros(len(result.problem.data['wards']))
+                        
+                        # Add each patient's assignments
+                        for j, patient in enumerate(result.problem.data['patients']):
+                            ward_idx = ward_assignments[j]
+                            ward = result.problem.data['wards'][ward_idx]
+                            day = day_assignments[j]
+                            
+                            # Calculate delay
+                            delay = max(0, day - patient['earliest_admission'])
+                            total_delay += delay
+                            
+                            # Update ward usage count
+                            ward_usage[ward_idx] += 1
+                            
+                            # Format the assignment row
+                            f.write(f"{patient['id']:<6} {patient['specialization']:<6} {ward['id']:<6} "
+                                    f"{day:<4} {patient['length_of_stay']:<4} {delay:<5}\n")
+                        
                 else:
                     # Basic information from solution history
                     latest = self.solution_history[-1]
