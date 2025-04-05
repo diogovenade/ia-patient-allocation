@@ -10,6 +10,9 @@ from pymoo.core.repair import Repair
 from pymoo.visualization.scatter import Scatter
 from pymoo.termination.default import DefaultMultiObjectiveTermination
 import matplotlib
+import time
+import sys
+from contextlib import redirect_stdout
 
 class RepairOperator(Repair):
    def _do(self, problem, X, **kwargs):
@@ -255,40 +258,79 @@ algorithm = NSGA2(pop_size=100,
                   eliminate_duplicates=True,
                   repair=RepairOperator())
 
-result = minimize(BalancedWorkload(data),
-                  algorithm,
-                  termination=DefaultMultiObjectiveTermination(),
-                  seed=1,
-                  verbose=True)
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
 
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
 
-# Print the solutions
-print("Solutions:")
-for i, solution in enumerate(result.X):
-   print(f"Solution {i + 1}:")
-   n_patients = len(solution) // 2
-   ward_assignments = solution[:n_patients].astype(int)
-   day_assignments = solution[n_patients:].astype(int)
-   for j in range(n_patients):
-      print(f"  Patient {j + 1}: Ward {ward_assignments[j]}, Day {day_assignments[j]}")
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
 
-   violations_per_ward_day = np.zeros((result.problem.n_wards, result.problem.n_days), dtype=int)
-   for ward in range(result.problem.n_wards):
-      for day in range(result.problem.n_days):
-            assigned_patients = sum(
-               1 for k, patient in enumerate(result.problem.data['patients'])
-               if ward_assignments[k] == ward and day_assignments[k] <= day < day_assignments[k] + patient['length_of_stay']
-            )
-            total_patients = assigned_patients + result.problem.data['wards'][ward]['carryover_patients'][day]
-            if total_patients > result.problem.data['wards'][ward]['bed_capacity']:
-               violations_per_ward_day[ward, day] = total_patients - result.problem.data['wards'][ward]['bed_capacity']
+output_file = "nsga_results.txt"
 
-   print("  Bed Capacity Violations (Ward, Day):")
-   for ward in range(result.problem.n_wards):
-      for day in range(result.problem.n_days):
-            if violations_per_ward_day[ward, day] > 0:
-               print(f"    Ward {ward + 1}, Day {day + 1}: {violations_per_ward_day[ward, day]} violations")
+# Redirect stdout to capture algorithm progress
+with open(output_file, "w") as file:
+    tee = Tee(sys.stdout, file)
+    sys.stdout = tee  # Redirect stdout to the Tee object
 
+    print("Optimization Results")
+    print("====================")
+    
+    start_time = time.time()
+
+    # Run the optimization and capture progress
+    result = minimize(BalancedWorkload(data),
+                      algorithm,
+                      termination=DefaultMultiObjectiveTermination(),
+                      seed=1,
+                      verbose=True)
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    # Write execution time and number of solutions
+    print(f"\nExecution Time: {execution_time:.2f} seconds")
+    print(f"Number of Solutions: {len(result.X)}\n")
+    print("Solutions:")
+
+    # Write solutions and details
+    for i, solution in enumerate(result.X):
+        print(f"Solution {i + 1}:")
+        n_patients = len(solution) // 2
+        ward_assignments = solution[:n_patients].astype(int)
+        day_assignments = solution[n_patients:].astype(int)
+        for j in range(n_patients):
+            print(f"  Patient {j + 1}: Ward {ward_assignments[j]}, Day {day_assignments[j]}")
+        
+        violations_per_ward_day = np.zeros((result.problem.n_wards, result.problem.n_days), dtype=int)
+        for ward in range(result.problem.n_wards):
+            for day in range(result.problem.n_days):
+                assigned_patients = sum(
+                    1 for k, patient in enumerate(result.problem.data['patients'])
+                    if ward_assignments[k] == ward and day_assignments[k] <= day < day_assignments[k] + patient['length_of_stay']
+                )
+                total_patients = assigned_patients + result.problem.data['wards'][ward]['carryover_patients'][day]
+                if total_patients > result.problem.data['wards'][ward]['bed_capacity']:
+                    violations_per_ward_day[ward, day] = total_patients - result.problem.data['wards'][ward]['bed_capacity']
+        
+        print("  Bed Capacity Violations (Ward, Day):")
+        for ward in range(result.problem.n_wards):
+            for day in range(result.problem.n_days):
+                if violations_per_ward_day[ward, day] > 0:
+                    print(f"    Ward {ward + 1}, Day {day + 1}: {violations_per_ward_day[ward, day]} violations")
+        print()
+
+    print("Objective Values:")
+    for i, obj in enumerate(result.F):
+        print(f"  Solution {i + 1}: {obj}")
+
+# Restore original stdout
+sys.stdout = sys.__stdout__
 
 plot = Scatter()
 plot.add(result.problem.pareto_front(), plot_type="line", color="black", alpha=0.7)

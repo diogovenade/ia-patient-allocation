@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from typing import List, Callable, Tuple
 from parse import parse_data
+import sys
 
 
 class PatientSchedulingProblem:
@@ -386,6 +387,19 @@ class ParetoSimulatedAnnealing:
         plt.legend()
         plt.show()
 
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()  # Ensure real-time output
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
 
 def run():
     """Run the PSA algorithm on the patient scheduling problem"""
@@ -394,7 +408,7 @@ def run():
     print("Active matplotlib backend:", matplotlib.get_backend())
     
     # Parse data and create problem instance
-    data = parse_data("dataset/s1m0.dat")
+    data = parse_data("dataset/s0m0.dat")
     problem = PatientSchedulingProblem(data)
     
     print("Problem created successfully.")
@@ -411,45 +425,54 @@ def run():
     )
     
     # Run optimization
-    pareto_front, objectives = psa.optimize()
-    
-    # Print results
-    print("\nResults:")
-    print(f"Found {len(pareto_front)} Pareto-optimal solutions")
-    
-    # Group solutions by objective values
-    obj_groups = {}
-    for i, obj in enumerate(objectives):
-        key = tuple(np.round(obj, 2))  # Round to 2 decimal places for grouping
-        if key not in obj_groups:
-            obj_groups[key] = []
-        obj_groups[key].append(i)
+    output_file = "psa_results.txt"
+    with open(output_file, "w") as file:
+        tee = Tee(sys.stdout, file)
+        sys.stdout = tee  # Redirect stdout to the Tee object
 
-    print(f"Found {len(obj_groups)} distinct objective value groups")
-
-    # Print unique objective values
-    unique_objs = sorted(obj_groups.keys())
-    print("\nDistinct objective values:")
-    for i, obj in enumerate(unique_objs[:10]):  # Show top 10
-        print(f"Group {i+1}: Cost={obj[0]}, Workload={obj[1]} ({len(obj_groups[obj])} solutions)")
-
-    # Print a few representative solutions
-    max_to_print = min(5, len(pareto_front))
-    for i in range(max_to_print):
-        print(f"\nSolution {i+1}:")
-        print(f"Objectives: Operational Cost = {objectives[i][0]:.2f}, Max Workload = {objectives[i][1]:.2f}")
+        # Run optimization
+        pareto_front, objectives = psa.optimize()
         
-        # Extract ward and day assignments
-        n_patients = problem.n_patients
-        ward_assignments = pareto_front[i][:n_patients].astype(int)
-        day_assignments = pareto_front[i][n_patients:].astype(int)
+        # Print results
+        print("\nResults:")
+        print(f"Found {len(pareto_front)} Pareto-optimal solutions")
         
-        print("Sample assignments (first 5 patients):")
-        for j in range(min(5, n_patients)):
-            print(f"  Patient {j+1}: Ward {ward_assignments[j]}, Day {day_assignments[j]}")
-    
-    # Visualize the Pareto front
-    psa.plot_pareto_front()
+        # Group solutions by objective values
+        obj_groups = {}
+        for i, obj in enumerate(objectives):
+            key = tuple(np.round(obj, 2))  # Round to 2 decimal places for grouping
+            if key not in obj_groups:
+                obj_groups[key] = []
+            obj_groups[key].append(i)
+
+        print(f"Found {len(obj_groups)} distinct objective value groups")
+
+        # Print unique objective values
+        unique_objs = sorted(obj_groups.keys())
+        print("\nDistinct objective values:")
+        for i, obj in enumerate(unique_objs[:10]):  # Show top 10
+            print(f"Group {i+1}: Cost={obj[0]}, Workload={obj[1]} ({len(obj_groups[obj])} solutions)")
+
+        # Print a few representative solutions
+        max_to_print = min(5, len(pareto_front))
+        for i in range(max_to_print):
+            print(f"\nSolution {i+1}:")
+            print(f"Objectives: Operational Cost = {objectives[i][0]:.2f}, Max Workload = {objectives[i][1]:.2f}")
+            
+            # Extract ward and day assignments
+            n_patients = problem.n_patients
+            ward_assignments = pareto_front[i][:n_patients].astype(int)
+            day_assignments = pareto_front[i][n_patients:].astype(int)
+            
+            print("Sample assignments (first 5 patients):")
+            for j in range(min(5, n_patients)):
+                print(f"  Patient {j+1}: Ward {ward_assignments[j]}, Day {day_assignments[j]}")
+        
+        # Visualize the Pareto front
+        psa.plot_pareto_front()
+
+    # Restore original stdout
+    sys.stdout = sys.__stdout__
     
     return pareto_front, objectives
 
