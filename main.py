@@ -6,7 +6,6 @@ import numpy as np
 import os
 import threading
 import time
-import json
 from datetime import datetime
 from parse import parse_data
 from nsga import BalancedWorkload, NSGA2, IntegerRandomSampling, TuplePointCrossover, AdmissionDayMutation, RepairOperator, DefaultMultiObjectiveTermination
@@ -25,9 +24,11 @@ class OptimizationApp:
         self.population_size = tk.IntVar(value=100)
         self.max_generations = tk.IntVar(value=100)
         self.mutation_prob = tk.DoubleVar(value=0.1)
+        self.initial_solutions = tk.IntVar(value=10)
         self.initial_temp = tk.DoubleVar(value=100.0)
-        self.cooling_rate = tk.DoubleVar(value=0.995)
-        self.iterations = tk.IntVar(value=3000)
+        self.max_iterations = tk.IntVar(value=100)
+        self.inner_iterations = tk.IntVar(value=10)
+        self.cooling_rate = tk.DoubleVar(value=0.75)
         self.running = False
         self.thread = None
         self.datasets = self.find_datasets()
@@ -95,17 +96,26 @@ class OptimizationApp:
         mut_prob_entry = ttk.Entry(self.nsga_params_frame, textvariable=self.mutation_prob)
         mut_prob_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(self.psa_params_frame, text="Initial Temperature:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        temp_entry = ttk.Entry(self.psa_params_frame, textvariable=self.initial_temp)
-        temp_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.psa_params_frame, text="Initial Solutions:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        initial_solutions_entry = ttk.Entry(self.psa_params_frame, textvariable=self.initial_solutions)
+        initial_solutions_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(self.psa_params_frame, text="Cooling Rate:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        cooling_entry = ttk.Entry(self.psa_params_frame, textvariable=self.cooling_rate)
-        cooling_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.psa_params_frame, text="Initial Temperature:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        initial_temp_entry = ttk.Entry(self.psa_params_frame, textvariable=self.initial_temp)
+        initial_temp_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(self.psa_params_frame, text="Iterations:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
-        iter_entry = ttk.Entry(self.psa_params_frame, textvariable=self.iterations)
-        iter_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.psa_params_frame, text="Max Iterations:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        max_iterations_entry = ttk.Entry(self.psa_params_frame, textvariable=self.max_iterations)
+        max_iterations_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.psa_params_frame, text="Inner Iterations:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        inner_iterations_entry = ttk.Entry(self.psa_params_frame, textvariable=self.inner_iterations)
+        inner_iterations_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.psa_params_frame, text="Cooling Rate:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        cooling_rate_entry = ttk.Entry(self.psa_params_frame, textvariable=self.cooling_rate)
+        cooling_rate_entry.grid(row=4, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+
         
         # Initialize with NSGA-II selected
         self.update_algorithm_controls()
@@ -445,13 +455,15 @@ class OptimizationApp:
                 # Create PSA algorithm instance
                 psa = ParetoSimulatedAnnealing(
                     problem=problem,
+                    n_initial_solutions=self.initial_solutions.get(),
                     temperature=self.initial_temp.get(),
                     cooling_rate=self.cooling_rate.get(),
-                    n_iterations=self.iterations.get()
+                    max_iterations=self.max_iterations.get(),
+                    inner_iterations=self.inner_iterations.get()
                 )
                 
                 # Initialize progress tracking
-                total_iterations = self.iterations.get()
+                total_iterations = self.max_iterations.get()
                 self.solution_history = []
                 
                 # Create a custom progress tracker
@@ -469,8 +481,8 @@ class OptimizationApp:
                     ))
                     
                     # Store history for visualization periodically
-                    if current_iteration % 50 == 0 or current_iteration == total_iterations:
-                        objectives = np.array(psa.pareto_front_objectives) if psa.pareto_front_objectives else np.array([])
+                    if current_iteration % 5 == 0 or current_iteration == total_iterations:
+                        objectives = np.array(psa.archive_objectives) if psa.archive_objectives else np.array([])
                         history_entry = {
                             'generation': current_iteration,
                             'objectives': objectives.tolist() if len(objectives) > 0 else []
@@ -564,7 +576,7 @@ class OptimizationApp:
             obj_array = np.array(objectives)
             
             # Plot the objectives
-            self.ax.scatter(obj_array[:, 0], obj_array[:, 1], c='red', label=f'Gen {generation}')
+            self.ax.scatter(obj_array[:, 0], obj_array[:, 1], c='red', label=f'{"Gen" if self.algorithm.get() == "NSGA2" else "Iter"} {generation}')
             
             # Plot best front line (convex hull approximation)
             if len(obj_array) > 2:
@@ -581,7 +593,13 @@ class OptimizationApp:
         # Set labels and title
         self.ax.set_xlabel('Operational Cost')
         self.ax.set_ylabel('Maximum Workload')
-        self.ax.set_title(f'Pareto Front - Generation {generation}')
+        
+        # Use algorithm-specific terminology in the title
+        if self.algorithm.get() == "NSGA2":
+            self.ax.set_title(f'Pareto Front - Generation {generation}')
+        else:
+            self.ax.set_title(f'Pareto Front - Iteration {generation}')
+        
         self.ax.grid(True)
         self.ax.legend()
         
@@ -632,13 +650,15 @@ class OptimizationApp:
         # Get the latest generation data
         latest = self.solution_history[-1]
         objectives = latest['objectives']
+        generation = latest['generation']
         
         if objectives:
             # Convert to numpy array for plotting
             obj_array = np.array(objectives)
             
             # Plot the objectives
-            self.ax.scatter(obj_array[:, 0], obj_array[:, 1], c='red', label=f'Gen {latest["generation"]}')
+            self.ax.scatter(obj_array[:, 0], obj_array[:, 1], c='red', 
+                        label=f'{"Gen" if self.algorithm.get() == "NSGA2" else "Iter"} {generation}')
             
             # Plot best front line (convex hull approximation)
             if len(obj_array) > 2:
@@ -655,7 +675,13 @@ class OptimizationApp:
         # Set labels and title
         self.ax.set_xlabel('Operational Cost')
         self.ax.set_ylabel('Maximum Workload')
-        self.ax.set_title(f'Pareto Front - Generation {latest["generation"]}')
+        
+        # Use algorithm-specific terminology in the title
+        if self.algorithm.get() == "NSGA2":
+            self.ax.set_title(f'Pareto Front - Generation {generation}')
+        else:
+            self.ax.set_title(f'Pareto Front - Iteration {generation}')
+        
         self.ax.grid(True)
         self.ax.legend()
         
@@ -718,10 +744,13 @@ class OptimizationApp:
             # NSGA-II specific information
             self.solution_text.insert(tk.END, f"Generations: {result.algorithm.n_gen}\n")
             self.solution_text.insert(tk.END, f"Population Size: {self.population_size.get()}\n")
+            self.solution_text.insert(tk.END, f"Mutation Probability: {self.mutation_prob.get()}\n")
         else:  # PSA
             # PSA specific information
-            self.solution_text.insert(tk.END, f"Iterations: {self.iterations.get()}\n")
+            self.solution_text.insert(tk.END, f"Initial solutions: {self.initial_solutions.get()}\n")
             self.solution_text.insert(tk.END, f"Initial Temp: {self.initial_temp.get()}\n")
+            self.solution_text.insert(tk.END, f"Max Iterations: {self.max_iterations.get()}\n")
+            self.solution_text.insert(tk.END, f"Inner Iterations: {self.inner_iterations.get()}\n")
             self.solution_text.insert(tk.END, f"Cooling Rate: {self.cooling_rate.get()}\n")
         
         self.solution_text.insert(tk.END, f"Number of Solutions: {len(result.X)}\n\n")
@@ -782,9 +811,11 @@ class OptimizationApp:
                     f.write(f"- Mutation Probability: {self.mutation_prob.get()}\n")
                 else:
                     f.write(f"- Algorithm: Pareto Simulated Annealing\n")
+                    f.write(f"- Initial Solutions: {self.initial_solutions.get()}\n")
                     f.write(f"- Initial Temperature: {self.initial_temp.get()}\n")
                     f.write(f"- Cooling Rate: {self.cooling_rate.get()}\n")
-                    f.write(f"- Total Iterations: {self.iterations.get()}\n")
+                    f.write(f"- Max Iterations: {self.max_iterations.get()}\n")
+                    f.write(f"- Inner Iterations: {self.inner_iterations.get()}\n")
                 
                 # Get the latest optimization result from solution history
                 if hasattr(self, 'last_result') and self.last_result is not None:
@@ -899,6 +930,10 @@ class OptimizationApp:
                     # Basic information from solution history
                     latest = self.solution_history[-1]
                     gen = latest['generation']
+                    if algorithm_type == "NSGA2":
+                        iteration_label = "Gen"
+                    else:
+                        iteration_label = "Iter"
                     f.write(f"\nReached {iteration_label.lower()} {gen}\n")
                     
                     if 'objectives' in latest and latest['objectives']:
@@ -1059,11 +1094,12 @@ class OptimizationApp:
                 # Create PSA algorithm instance
                 psa = ParetoSimulatedAnnealing(
                     problem=problem,
+                    n_initial_solutions=self.initial_solutions.get(),
                     temperature=self.initial_temp.get(),
                     cooling_rate=self.cooling_rate.get(),
-                    n_iterations=self.iterations.get()
+                    max_iterations=self.max_iterations.get(),
+                    inner_iterations=self.inner_iterations.get()
                 )
-                
                 # Run optimization
                 pareto_front, objectives = psa.optimize()
                 

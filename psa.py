@@ -125,36 +125,53 @@ class PatientSchedulingProblem:
 class ParetoSimulatedAnnealing:
     def __init__(self, 
                  problem,
-                 initial_solution=None,
-                 temperature: float = 1000.0,
+                 initial_solutions=None,
+                 n_initial_solutions=10,
+                 temperature: float = 100.0,
                  cooling_rate: float = 0.95,
-                 n_iterations: int = 1000,
-                 step_size: float = 0.1):
+                 max_iterations: int = 1000,
+                 inner_iterations: int = 10):
         self.problem = problem
-        # Create initial solution if not provided
-        if initial_solution is None:
-            self.current_solution = np.concatenate((
-                np.random.randint(0, len(problem.data['wards']), problem.n_patients),
-                np.array([random.randint(
-                    patient['earliest_admission'], 
-                    patient['latest_admission']
-                ) for patient in problem.data['patients']])
-            ))
-            # Repair the initial solution to ensure feasibility
-            self.repair_solution(self.current_solution)
-        else:
-            self.current_solution = initial_solution
-            # Repair the provided initial solution (if any)
-            self.repair_solution(self.current_solution)
-            
         self.temperature = temperature
+        self.initial_temperature = temperature
         self.cooling_rate = cooling_rate
-        self.n_iterations = n_iterations
-        self.step_size = step_size
-        self.pareto_front = []
-        self.pareto_front_objectives = []
-        self.update_pareto_front(self.current_solution)
+        self.max_iterations = max_iterations
+        self.inner_iterations = inner_iterations
         
+        # Generate initial solutions if not provided
+        if initial_solutions is None:
+            self.solutions = []
+            for _ in range(n_initial_solutions):
+                solution = np.concatenate((
+                    np.random.randint(0, len(problem.data['wards']), problem.n_patients),
+                    np.array([random.randint(
+                        patient['earliest_admission'], 
+                        patient['latest_admission']
+                    ) for patient in problem.data['patients']])
+                ))
+                self.repair_solution(solution)
+                self.solutions.append(solution)
+        else:
+            self.solutions = initial_solutions
+            for solution in self.solutions:
+                self.repair_solution(solution)
+        
+        # Initialize archive with non-dominated solutions from initial set
+        self.archive = []
+        self.archive_objectives = []
+        
+        # Initialize objective weights (equal weight initially)
+        self.objective_weights = np.ones(2) / 2  # Assuming 2 objectives
+        
+        # Initialize archive with non-dominated solutions from initial population
+        for solution in self.solutions:
+            objectives, violation = self.evaluate_solution(solution)
+            if violation == 0:
+                self.archive.append(solution.copy())
+                self.archive_objectives.append(objectives)
+        
+        self.progress_callback = None
+    
     def dominates(self, sol1_objectives: List[float], sol2_objectives: List[float]) -> bool:
         """Check if solution 1 dominates solution 2 (assuming minimization)"""
         better_in_any = False
@@ -197,7 +214,7 @@ class ParetoSimulatedAnnealing:
         return out["F"], out["H"]
     
     def generate_neighbor(self, solution):
-        """Generate a more diverse neighboring solution"""
+        """Generate a neighboring solution"""
         neighbor = solution.copy()
         n_patients = self.problem.n_patients
         
@@ -268,135 +285,187 @@ class ParetoSimulatedAnnealing:
         if possible_days:
             solution[n_patients + patient_idx] = random.choice(possible_days)
     
-    def update_pareto_front(self, new_solution):
-        """Update the Pareto front with a new solution"""
+    def update_archive(self, new_solution):
+        """Update the archive with a new solution (line 6 in pseudocode)"""
         new_objectives, violation = self.evaluate_solution(new_solution)
         
         # Skip solutions that violate constraints
         if violation > 0:
-            return
+            return False
             
-        # Check for duplicates in objective space (IMPORTANT NEW CHECK)
-        for objectives in self.pareto_front_objectives:
+        # Check for duplicates in objective space
+        for objectives in self.archive_objectives:
             if np.allclose(objectives, new_objectives, rtol=1e-5, atol=1e-8):
-                return  # Skip if this objective vector already exists
+                return False  # Skip if this objective vector already exists
                 
-        # Check if the new solution is dominated by any solution in the Pareto front
+        # Check if the new solution is dominated by any solution in the archive
         dominated = False
         solutions_to_remove = []
         
-        for i, (solution, objectives) in enumerate(zip(self.pareto_front, self.pareto_front_objectives)):
+        for i, (solution, objectives) in enumerate(zip(self.archive, self.archive_objectives)):
             if self.dominates(objectives, new_objectives):
                 dominated = True
                 break
             elif self.dominates(new_objectives, objectives):
                 solutions_to_remove.append(i)
                 
-        # If not dominated, add to Pareto front and remove dominated solutions
+        # If not dominated, add to archive and remove dominated solutions
         if not dominated:
             # Remove dominated solutions (in reverse order to avoid index issues)
             for i in sorted(solutions_to_remove, reverse=True):
-                self.pareto_front.pop(i)
-                self.pareto_front_objectives.pop(i)
+                self.archive.pop(i)
+                self.archive_objectives.pop(i)
                 
-            self.pareto_front.append(new_solution.copy())
-            self.pareto_front_objectives.append(new_objectives)
+            self.archive.append(new_solution.copy())
+            self.archive_objectives.append(new_objectives)
+            return True
+            
+        return False
+    
+    def get_closest_solution(self, solution, objectives):
+        """Find closest solution in archive to current solution (line 7 in pseudocode)"""
+        if not self.archive:
+            return None, None
+            
+        curr_objectives, _ = self.evaluate_solution(solution)
+        
+        # Calculate Euclidean distances in normalized objective space
+        min_dist = float('inf')
+        closest_solution = None
+        closest_objectives = None
+        
+        for archive_sol, archive_obj in zip(self.archive, self.archive_objectives):
+            # Skip if it's the same solution
+            if np.array_equal(solution, archive_sol):
+                continue
+                
+            # Calculate distance in normalized objective space
+            dist = np.linalg.norm(np.array(curr_objectives) - np.array(archive_obj))
+            
+            if dist < min_dist:
+                min_dist = dist
+                closest_solution = archive_sol
+                closest_objectives = archive_obj
+                
+        return closest_solution, closest_objectives
+    
+    def update_objective_weights(self, current_objectives, neighbor_objectives):
+        """Update weights based on partial dominance (line 8 in pseudocode)"""
+        # Count objectives where each solution is better
+        current_better = 0
+        neighbor_better = 0
+        
+        for i, (curr, neigh) in enumerate(zip(current_objectives, neighbor_objectives)):
+            if curr < neigh:  # Current is better (minimization)
+                current_better += 1
+            elif neigh < curr:  # Neighbor is better
+                neighbor_better += 1
+        
+        # Update weights if there's partial dominance
+        if current_better > 0 and neighbor_better > 0:
+            # Increase weights for objectives where current solution is worse
+            for i, (curr, neigh) in enumerate(zip(current_objectives, neighbor_objectives)):
+                if neigh < curr:  # Current is worse in this objective
+                    self.objective_weights[i] *= 1.05  # Increase weight
+                    
+            # Normalize weights
+            self.objective_weights = self.objective_weights / np.sum(self.objective_weights)
     
     def acceptance_probability(self, current_objectives, neighbor_objectives):
-        """Modified acceptance probability for multiple objectives"""
-        # Equal weight to each objective
-        norm_current = [o/100 for o in current_objectives]  # Normalize to similar scale
-        norm_neighbor = [o/100 for o in neighbor_objectives]
+        """Calculate acceptance probability for dominated solutions (line 10 in pseudocode)"""
+        # Use weighted sum of objectives
+        weighted_current = np.sum(np.array(current_objectives) * self.objective_weights)
+        weighted_neighbor = np.sum(np.array(neighbor_objectives) * self.objective_weights)
         
-        # Calculate energy difference using Euclidean distance
-        curr_vec = np.array(norm_current)
-        neig_vec = np.array(norm_neighbor)
-        
-        # For minimization, negative energy diff means improvement
-        energy_diff = np.linalg.norm(neig_vec) - np.linalg.norm(curr_vec)
+        # Calculate energy difference (for minimization)
+        energy_diff = weighted_neighbor - weighted_current
         
         # Always accept improvements
         if energy_diff < 0:
             return 1.0
             
-        # Calculate acceptance probability with appropriate scaling
+        # Calculate acceptance probability
         if self.temperature < 1e-10:
             return 0.0
             
-        # Use scaled energy difference
-        try:
-            return min(1.0, np.exp(-energy_diff / self.temperature))
-        except OverflowError:
-            return 0.0
+        return np.exp(-energy_diff / self.temperature)
     
-    # Add to ParetoSimulatedAnnealing class in psa.py:
+    def check_cooling_condition(self, outer_iter):
+        """Check if cooling should stop"""
+        # Stop if temperature is very low or max iterations reached
+        return self.temperature < 1e-6 or outer_iter >= self.max_iterations
+    
     def optimize(self):
-        """Run the Pareto Simulated Annealing algorithm"""
+        """Run the Pareto Simulated Annealing algorithm following the pseudocode"""
         print("Starting PSA optimization...")
         
-        # Initialize progress callback if not already defined
-        if not hasattr(self, 'progress_callback'):
-            self.progress_callback = None
+        outer_iter = 0
         
-        for i in range(self.n_iterations):
-            if i % 100 == 0:
-                print(f"Iteration {i}/{self.n_iterations}, Temperature: {self.temperature:.2f}")
-                print(f"Current Pareto front size: {len(self.pareto_front)}")
+        # Outer loop
+        while not self.check_cooling_condition(outer_iter):
+            outer_iter += 1
+            
+            if outer_iter % 5 == 0 or outer_iter == 1:
+                print(f"Outer iteration {outer_iter}/{self.max_iterations}, Temperature: {self.temperature:.2f}")
+                print(f"Current archive size: {len(self.archive)}")
                 
                 # Call progress callback if defined
-                if self.progress_callback and not self.progress_callback(i, self.temperature, len(self.pareto_front)):
+                if self.progress_callback and not self.progress_callback(outer_iter, self.temperature, len(self.archive)):
                     print("Optimization stopped by user")
                     break
             
-            # Generate neighbor
-            neighbor = self.generate_neighbor(self.current_solution)
-            
-            # Evaluate current and neighbor
-            current_objectives, current_violation = self.evaluate_solution(self.current_solution)
-            neighbor_objectives, neighbor_violation = self.evaluate_solution(neighbor)
-            
-            # Skip invalid neighbors
-            if neighbor_violation > 0:
-                continue
+            # For each solution in current population
+            for solution_idx, current_solution in enumerate(self.solutions):
+                current_objectives, current_violation = self.evaluate_solution(current_solution)
                 
-            # Accept new solution based on dominance or probability
-            accept = False
-            if self.dominates(neighbor_objectives, current_objectives):
-                accept = True
-            elif not self.dominates(current_objectives, neighbor_objectives):
-                # Neither dominates - use acceptance probability
-                probability = self.acceptance_probability(current_objectives, neighbor_objectives)
-                if random.random() < probability:
-                    accept = True
+                # Skip invalid solutions
+                if current_violation > 0:
+                    continue
+                    
+                
+                # Inner loop
+                for inner_iter in range(self.inner_iterations):
+                    # Generate neighbor S_new
+                    neighbor = self.generate_neighbor(current_solution)
+                    self.repair_solution(neighbor)
+                    
+                    neighbor_objectives, neighbor_violation = self.evaluate_solution(neighbor)
+                    
+                    # Skip invalid neighbors
+                    if neighbor_violation > 0:
+                        continue
+                        
+                    # Check dominance
+                    if not self.dominates(current_objectives, neighbor_objectives):
+                        # Update archive with S_new
+                        archive_updated = self.update_archive(neighbor)
+                        
+                        # Find closest solution
+                        closest_solution, closest_objectives = self.get_closest_solution(current_solution, current_objectives)
+                        
+                        # Update weights
+                        if closest_objectives is not None:
+                            self.update_objective_weights(current_objectives, neighbor_objectives)
+                            
+                        # Accept the new solution
+                        current_solution = neighbor.copy()
+                        current_objectives = neighbor_objectives.copy()
+                        self.solutions[solution_idx] = current_solution
+                    else:
+                        # Dominated case
+                        probability = self.acceptance_probability(current_objectives, neighbor_objectives)
+                        if random.random() < probability:
+                            current_solution = neighbor.copy()
+                            current_objectives = neighbor_objectives.copy()
+                            self.solutions[solution_idx] = current_solution
             
-            if accept:
-                self.current_solution = neighbor.copy()
-                self.update_pareto_front(neighbor)
-            
-            # Cool down temperature
+            # Decrease temperature
             self.temperature *= self.cooling_rate
         
         # Final progress callback
         if self.progress_callback:
-            self.progress_callback(self.n_iterations, self.temperature, len(self.pareto_front))
+            self.progress_callback(outer_iter, self.temperature, len(self.archive))
         
         print("Optimization complete!")
-        print(f"Final Pareto front size: {len(self.pareto_front)}")
-        return self.pareto_front, self.pareto_front_objectives
-
-    def plot_pareto_front(self):
-        """Plot the Pareto front"""
-        if not self.pareto_front_objectives:
-            print("No solutions in Pareto front. Run optimize() first.")
-            return
-            
-        objectives = np.array(self.pareto_front_objectives)
-        
-        plt.figure(figsize=(10, 6))
-        plt.scatter(objectives[:, 0], objectives[:, 1], c='red', s=50, edgecolors='none', label='PSA Solutions')
-        plt.xlabel('Operational Cost')
-        plt.ylabel('Maximum Workload')
-        plt.title('Pareto Front - Patient Scheduling Problem')
-        plt.grid(True)
-        plt.legend()
-        plt.show()
+        print(f"Final archive size: {len(self.archive)}")
+        return self.archive, self.archive_objectives
