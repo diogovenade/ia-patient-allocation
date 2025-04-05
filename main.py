@@ -52,8 +52,8 @@ class OptimizationApp:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Split into left panel (controls) and right panel (visualization)
-        left_panel = ttk.Frame(main_frame, width=300)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, padx=5, pady=5)
+        left_panel = ttk.Frame(main_frame, width=350)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         
         right_panel = ttk.Frame(main_frame)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -176,13 +176,14 @@ class OptimizationApp:
         viz_frame = ttk.LabelFrame(right_panel, text="Visualization")
         viz_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create matplotlib figure for visualization
-        self.fig = plt.Figure(figsize=(6, 4), dpi=100)
+        # Create matplotlib figure for visualization with larger size
+        self.fig = plt.Figure(figsize=(10, 6), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel('Operational Cost')
-        self.ax.set_ylabel('Maximum Workload')
-        self.ax.set_title('Pareto Front Evolution')
+        self.ax.set_xlabel('Operational Cost', fontsize=12)
+        self.ax.set_ylabel('Maximum Workload', fontsize=12)
+        self.ax.set_title('Pareto Front Evolution', fontsize=14)
         self.ax.grid(True)
+        self.fig.tight_layout(pad=3.0)
         
         # Canvas for displaying the plot
         self.canvas = FigureCanvasTkAgg(self.fig, viz_frame)
@@ -193,6 +194,8 @@ class OptimizationApp:
         toolbar_frame.pack(fill=tk.X)
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
+
+        self.comparison_mode()
     
     def update_algorithm_controls(self):
         """Update the displayed controls based on the selected algorithm"""
@@ -910,6 +913,243 @@ class OptimizationApp:
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to save results: {str(e)}")
 
+    def comparison_mode(self):
+        # Comparison mode frame
+        comparison_frame = ttk.LabelFrame(self.control_frame, text="Algorithm Comparison")
+        comparison_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W+tk.E, padx=5, pady=5)
+        
+        # Compare button - centered in the frame
+        self.compare_button = ttk.Button(comparison_frame, text="Compare Algorithms", 
+                                    command=self.run_comparison)
+        self.compare_button.pack(pady=10, padx=10, fill=tk.X)
+        
+        # Results table for comparison
+        results_frame = ttk.Frame(self.notebook)
+        self.notebook.add(results_frame, text="Comparison")
+        
+        # Create a treeview widget for results with wider columns
+        columns = ("Algorithm", "Cost (min-max)", "Workload (min-max)", "Solutions", "Time (s)")
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=6)
+        
+        # Define column headings and set wider widths for range values
+        self.results_tree.heading("Algorithm", text="Algorithm")
+        self.results_tree.column("Algorithm", width=100, anchor=tk.CENTER)
+        
+        self.results_tree.heading("Cost (min-max)", text="Cost (min-max)")
+        self.results_tree.column("Cost (min-max)", width=150, anchor=tk.CENTER)
+        
+        self.results_tree.heading("Workload (min-max)", text="Workload (min-max)")
+        self.results_tree.column("Workload (min-max)", width=150, anchor=tk.CENTER)
+        
+        self.results_tree.heading("Solutions", text="Solutions")
+        self.results_tree.column("Solutions", width=80, anchor=tk.CENTER)
+        
+        self.results_tree.heading("Time (s)", text="Time (s)")
+        self.results_tree.column("Time (s)", width=80, anchor=tk.CENTER)
+        
+        # Add scrollbar
+        tree_scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_tree.yview)
+        self.results_tree.configure(yscrollcommand=tree_scroll.set)
+        
+        # Pack tree and scrollbar
+        self.results_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+
+    def run_comparison(self):
+        """Run both algorithms on the same dataset and compare results"""
+        if self.running:
+            messagebox.showerror("Error", "An algorithm is already running!")
+            return
+        
+        # Check if dataset exists
+        dataset = self.dataset_path.get()
+        if not os.path.exists(dataset):
+            messagebox.showerror("Error", f"Dataset {dataset} not found")
+            return
+        
+        # Clear previous results
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+        
+        # Clear the main visualization plot for comparison
+        self.ax.clear()
+        self.ax.set_xlabel('Operational Cost', fontsize=12)
+        self.ax.set_ylabel('Maximum Workload', fontsize=12)
+        self.ax.set_title('Algorithm Comparison', fontsize=14)
+        self.ax.grid(True)
+        
+        # Initialize results storage
+        self.comparison_results = {}
+        
+        # Run both algorithms sequentially
+        algorithms = ["NSGA2", "PSA"]
+        for algo in algorithms:
+            # Save current algorithm selection
+            current_algo = self.algorithm.get()
+            
+            # Set algorithm
+            self.algorithm.set(algo)
+            self.update_algorithm_controls()
+            
+            # Update status
+            self.status_var.set(f"Running {algo} for comparison...")
+            
+            # Run algorithm
+            self.running = True
+            self.run_button.config(state=tk.DISABLED)
+            
+            # Create and start thread
+            thread = threading.Thread(target=self._run_comparison_thread, args=(algo,))
+            thread.daemon = True
+            thread.start()
+            
+            # Wait for completion
+            while self.running:
+                self.root.update()
+                time.sleep(0.1)
+            
+            # Reset to original algorithm selection
+            self.algorithm.set(current_algo)
+            self.update_algorithm_controls()
+        
+        # Show comparison tab
+        self.notebook.select(self.notebook.index(len(self.notebook.tabs())-1))
+        
+        # Update status
+        self.status_var.set("Comparison complete!")
+
+    def _run_comparison_thread(self, algorithm):
+        """Run a single algorithm for comparison"""
+        try:
+            # Parse data
+            dataset = self.dataset_path.get()
+            data = parse_data(dataset)
+            
+            start_time = time.time()
+            
+            if algorithm == "NSGA2":
+                # Create NSGA-II algorithm
+                algo = NSGA2(
+                    pop_size=self.population_size.get(),
+                    sampling=IntegerRandomSampling(),
+                    crossover=TuplePointCrossover(n_points=2),
+                    mutation=AdmissionDayMutation(prob=self.mutation_prob.get()),
+                    eliminate_duplicates=True,
+                    repair=RepairOperator()
+                )
+                
+                # Create termination criterion
+                termination = DefaultMultiObjectiveTermination(
+                    n_max_gen=self.max_generations.get(),
+                )
+                
+                # Run the optimization
+                result = minimize(
+                    BalancedWorkload(data),
+                    algo,
+                    termination=termination,
+                    seed=1,
+                    verbose=True
+                )
+                
+            else:  # PSA algorithm
+                # Create problem object
+                problem = PatientSchedulingProblem(data)
+                
+                # Create PSA algorithm instance
+                psa = ParetoSimulatedAnnealing(
+                    problem=problem,
+                    temperature=self.initial_temp.get(),
+                    cooling_rate=self.cooling_rate.get(),
+                    n_iterations=self.iterations.get()
+                )
+                
+                # Run optimization
+                pareto_front, objectives = psa.optimize()
+                
+                # Create a result object similar to NSGA-II
+                class PSAResult:
+                    def __init__(self, X, F, problem):
+                        self.X = np.array(X)
+                        self.F = np.array(F)
+                        self.problem = problem
+                        self.success = True
+                        
+                result = PSAResult(pareto_front, objectives, problem)
+                
+            # Calculate execution time
+            end_time = time.time()
+            execution_time = end_time - start_time
+            
+            # Store results
+            self.comparison_results[algorithm] = {
+                'result': result,
+                'time': execution_time
+            }
+            
+            # Add to comparison tree
+            self.root.after(0, lambda: self._update_comparison_tree(algorithm, result, execution_time))
+            
+            # Update main plot with comparison results
+            self.root.after(0, lambda: self._update_comparison_plot())
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            self.status_var.set(f"Error: {str(e)}")
+        finally:
+            self.running = False
+            self.root.after(0, lambda: self.run_button.config(state=tk.NORMAL))
+
+    def _update_comparison_tree(self, algorithm, result, execution_time):
+        """Update the comparison results tree with algorithm results"""
+        if result.F is not None and len(result.F) > 0:
+            # Calculate min and max for both objectives
+            min_cost = np.min(result.F[:, 0])
+            max_cost = np.max(result.F[:, 0])
+            min_workload = np.min(result.F[:, 1])
+            max_workload = np.max(result.F[:, 1])
+            
+            # Add to tree
+            self.results_tree.insert("", tk.END, values=(
+                algorithm,
+                f"{min_cost:.2f} - {max_cost:.2f}",
+                f"{min_workload:.4f} - {max_workload:.4f}",
+                len(result.F),
+                f"{execution_time:.2f}"
+            ))
+
+    def _update_comparison_plot(self):
+        """Update the main plot with comparison results from both algorithms"""
+        # Clear the plot
+        self.ax.clear()
+        
+        colors = {'NSGA2': 'blue', 'PSA': 'red'}
+        markers = {'NSGA2': 'o', 'PSA': 'x'}
+        
+        # Plot results for each algorithm
+        for algo, data in self.comparison_results.items():
+            result = data['result']
+            if result.F is not None and len(result.F) > 0:
+                self.ax.scatter(
+                    result.F[:, 0], result.F[:, 1],
+                    c=colors.get(algo, 'green'),
+                    marker=markers.get(algo, '+'),
+                    s=50, alpha=0.7,
+                    label=f'{algo} ({len(result.F)} solutions)'
+                )
+        
+        # Set labels and title
+        self.ax.set_xlabel('Operational Cost', fontsize=12)
+        self.ax.set_ylabel('Maximum Workload', fontsize=12)
+        self.ax.set_title('Algorithm Comparison on Same Dataset', fontsize=14)
+        self.ax.grid(True)
+        self.ax.legend()
+        
+        # Redraw the main canvas
+        self.canvas.draw()
+    
     def on_close(self):
         self.root.destroy()
 
