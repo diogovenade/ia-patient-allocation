@@ -329,14 +329,24 @@ class ParetoSimulatedAnnealing:
         except OverflowError:
             return 0.0
     
+    # Add to ParetoSimulatedAnnealing class in psa.py:
     def optimize(self):
         """Run the Pareto Simulated Annealing algorithm"""
         print("Starting PSA optimization...")
+        
+        # Initialize progress callback if not already defined
+        if not hasattr(self, 'progress_callback'):
+            self.progress_callback = None
         
         for i in range(self.n_iterations):
             if i % 100 == 0:
                 print(f"Iteration {i}/{self.n_iterations}, Temperature: {self.temperature:.2f}")
                 print(f"Current Pareto front size: {len(self.pareto_front)}")
+                
+                # Call progress callback if defined
+                if self.progress_callback and not self.progress_callback(i, self.temperature, len(self.pareto_front)):
+                    print("Optimization stopped by user")
+                    break
             
             # Generate neighbor
             neighbor = self.generate_neighbor(self.current_solution)
@@ -365,6 +375,10 @@ class ParetoSimulatedAnnealing:
             
             # Cool down temperature
             self.temperature *= self.cooling_rate
+        
+        # Final progress callback
+        if self.progress_callback:
+            self.progress_callback(self.n_iterations, self.temperature, len(self.pareto_front))
         
         print("Optimization complete!")
         print(f"Final Pareto front size: {len(self.pareto_front)}")

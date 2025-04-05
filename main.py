@@ -10,9 +10,10 @@ import json
 from datetime import datetime
 from parse import parse_data
 from nsga import BalancedWorkload, NSGA2, IntegerRandomSampling, TuplePointCrossover, AdmissionDayMutation, RepairOperator, DefaultMultiObjectiveTermination
+from psa import ParetoSimulatedAnnealing, PatientSchedulingProblem
 from pymoo.optimize import minimize
 
-class NSGAOptimizationApp:
+class OptimizationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("NSGA-II Patient Scheduling Optimization")
@@ -24,6 +25,9 @@ class NSGAOptimizationApp:
         self.population_size = tk.IntVar(value=100)
         self.max_generations = tk.IntVar(value=100)
         self.mutation_prob = tk.DoubleVar(value=0.1)
+        self.initial_temp = tk.DoubleVar(value=100.0)
+        self.cooling_rate = tk.DoubleVar(value=0.995)
+        self.iterations = tk.IntVar(value=3000)
         self.running = False
         self.thread = None
         self.datasets = self.find_datasets()
@@ -54,32 +58,60 @@ class NSGAOptimizationApp:
         right_panel = ttk.Frame(main_frame)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
+        # Left panel - Algorithm Selection
+        algo_select_frame = ttk.LabelFrame(left_panel, text="Algorithm Selection")
+        algo_select_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Algorithm selection with radio buttons
+        self.algorithm = tk.StringVar(value="NSGA2")
+        ttk.Radiobutton(algo_select_frame, text="NSGA-II", variable=self.algorithm, 
+                        value="NSGA2", command=self.update_algorithm_controls).pack(side=tk.LEFT, padx=20, pady=5)
+        ttk.Radiobutton(algo_select_frame, text="Pareto Simulated Annealing", variable=self.algorithm, 
+                        value="PSA", command=self.update_algorithm_controls).pack(side=tk.LEFT, padx=20, pady=5)
+        
         # Left panel - Controls
-        control_frame = ttk.LabelFrame(left_panel, text="Algorithm Controls")
-        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.control_frame = ttk.LabelFrame(left_panel, text="Algorithm Controls")
+        self.control_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # Dataset selection
-        ttk.Label(control_frame, text="Dataset:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        dataset_combo = ttk.Combobox(control_frame, textvariable=self.dataset_path, values=self.datasets)
+        ttk.Label(self.control_frame, text="Dataset:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        dataset_combo = ttk.Combobox(self.control_frame, textvariable=self.dataset_path, values=self.datasets)
         dataset_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        # Population size
-        ttk.Label(control_frame, text="Population Size:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        pop_size_entry = ttk.Entry(control_frame, textvariable=self.population_size)
-        pop_size_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        # Create frames for each algorithm's specific controls
+        self.nsga_params_frame = ttk.Frame(self.control_frame)
+        self.psa_params_frame = ttk.Frame(self.control_frame)
         
-        # Max generations
-        ttk.Label(control_frame, text="Max Generations:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
-        max_gen_entry = ttk.Entry(control_frame, textvariable=self.max_generations)
-        max_gen_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        # NSGA-II specific parameters
+        ttk.Label(self.nsga_params_frame, text="Population Size:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        pop_size_entry = ttk.Entry(self.nsga_params_frame, textvariable=self.population_size)
+        pop_size_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        # Mutation probability
-        ttk.Label(control_frame, text="Mutation Prob:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        mut_prob_entry = ttk.Entry(control_frame, textvariable=self.mutation_prob)
-        mut_prob_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(self.nsga_params_frame, text="Max Generations:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        max_gen_entry = ttk.Entry(self.nsga_params_frame, textvariable=self.max_generations)
+        max_gen_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.nsga_params_frame, text="Mutation Prob:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        mut_prob_entry = ttk.Entry(self.nsga_params_frame, textvariable=self.mutation_prob)
+        mut_prob_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.psa_params_frame, text="Initial Temperature:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        temp_entry = ttk.Entry(self.psa_params_frame, textvariable=self.initial_temp)
+        temp_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.psa_params_frame, text="Cooling Rate:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        cooling_entry = ttk.Entry(self.psa_params_frame, textvariable=self.cooling_rate)
+        cooling_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(self.psa_params_frame, text="Iterations:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        iter_entry = ttk.Entry(self.psa_params_frame, textvariable=self.iterations)
+        iter_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        # Initialize with NSGA-II selected
+        self.update_algorithm_controls()
         
         # Buttons frame
-        buttons_frame = ttk.Frame(control_frame)
+        buttons_frame = ttk.Frame(self.control_frame)
         buttons_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=10)
         
         # Run button
@@ -161,6 +193,20 @@ class NSGAOptimizationApp:
         toolbar_frame.pack(fill=tk.X)
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
+    
+    def update_algorithm_controls(self):
+        """Update the displayed controls based on the selected algorithm"""
+        # Remove both frames first
+        self.nsga_params_frame.grid_forget()
+        self.psa_params_frame.grid_forget()
+        
+        # Show the appropriate frame based on selected algorithm
+        if self.algorithm.get() == "NSGA2":
+            self.nsga_params_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, padx=5, pady=5)
+            self.control_frame.config(text="NSGA-II Controls")
+        else:  # PSA
+            self.psa_params_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, padx=5, pady=5)
+            self.control_frame.config(text="PSA Controls")
     
     def on_solution_selected(self, event=None):
         """Handle the selection of a solution from the dropdown"""
@@ -270,7 +316,7 @@ class NSGAOptimizationApp:
         self.thread.start()
     
     def _run_algorithm_thread(self):
-        """Run the NSGA-II algorithm in a separate thread"""
+        """Run the selected algorithm in a separate thread"""
         try:
             # Reset progress
             self.progress['value'] = 0
@@ -284,109 +330,190 @@ class NSGAOptimizationApp:
             # Update status
             self.status_var.set("Setting up algorithm...")
             
-            # Create a local copy of callback state that won't be affected by reset operations
-            # This avoids the AttributeError when the main object's _callback_state is deleted
-            callback_state = {
-                'running': True,
-                'max_generations': self.max_generations.get(),
-                'solution_history': [],
-            }
+            # Get the selected algorithm
+            selected_algorithm = self.algorithm.get()
             
-            # Store the reference in the instance for other methods to access
-            self._callback_state = callback_state
+            start_time = time.time()
             
-            # Define a callback that uses the local state rather than accessing the class directly
-            def external_callback(algorithm):
-                # Check the local copy of running state
-                if not callback_state['running']:
-                    return False
+            if selected_algorithm == "NSGA2":
+                # Create a local copy of callback state that won't be affected by reset operations
+                callback_state = {
+                    'running': True,
+                    'max_generations': self.max_generations.get(),
+                    'solution_history': [],
+                }
+                
+                # Store the reference in the instance for other methods to access
+                self._callback_state = callback_state
+                
+                # Define a callback that uses the local state rather than accessing the class directly
+                def external_callback(algorithm):
+                    # Check the local copy of running state
+                    if not callback_state['running']:
+                        return False
+                        
+                    # Get current generation
+                    current_gen = algorithm.n_gen
+                    max_gen = callback_state['max_generations']
                     
-                # Get current generation
-                current_gen = algorithm.n_gen
-                max_gen = callback_state['max_generations']
+                    # Store data for later UI updates
+                    objectives = algorithm.pop.get("F")
+                    callback_state['solution_history'].append({
+                        'generation': current_gen,
+                        'objectives': objectives.tolist() if objectives is not None else []
+                    })
+                    
+                    # Using local variables to communicate with main thread
+                    callback_state['current_gen'] = current_gen
+                    callback_state['progress'] = int((current_gen / max_gen) * 100)
+                    
+                    return True
                 
-                # Store data for later UI updates
-                objectives = algorithm.pop.get("F")
-                callback_state['solution_history'].append({
-                    'generation': current_gen,
-                    'objectives': objectives.tolist() if objectives is not None else []
-                })
-                
-                # Using local variables to communicate with main thread
-                callback_state['current_gen'] = current_gen
-                callback_state['progress'] = int((current_gen / max_gen) * 100)
-                
-                return True
-            
-            # Create algorithm with external callback
-            algorithm = NSGA2(
-                pop_size=self.population_size.get(),
-                sampling=IntegerRandomSampling(),
-                crossover=TuplePointCrossover(n_points=2),
-                mutation=AdmissionDayMutation(prob=self.mutation_prob.get()),
-                eliminate_duplicates=True,
-                repair=RepairOperator()
-            )
-            
-            # Create termination criterion
-            termination = DefaultMultiObjectiveTermination(
-                n_max_gen=self.max_generations.get(),
-            )
-            
-            # Update status
-            self.status_var.set("Running optimization...")
-            
-            # Start a separate timer thread for UI updates
-            stop_ui_updates = threading.Event()
-            ui_update_thread = threading.Thread(
-                target=self._ui_updater, 
-                args=(stop_ui_updates, callback_state)
-            )
-            ui_update_thread.daemon = True
-            ui_update_thread.start()
-            
-            try:
-                # Run the optimization
-                start_time = time.time()
-                result = minimize(
-                    BalancedWorkload(data),
-                    algorithm,
-                    termination=termination,
-                    seed=1,
-                    verbose=True,
-                    save_history=True,
-                    callback=external_callback
+                # Create algorithm with external callback
+                algorithm = NSGA2(
+                    pop_size=self.population_size.get(),
+                    sampling=IntegerRandomSampling(),
+                    crossover=TuplePointCrossover(n_points=2),
+                    mutation=AdmissionDayMutation(prob=self.mutation_prob.get()),
+                    eliminate_duplicates=True,
+                    repair=RepairOperator()
                 )
-                end_time = time.time()
+                
+                # Create termination criterion
+                termination = DefaultMultiObjectiveTermination(
+                    n_max_gen=self.max_generations.get(),
+                )
+                
+                # Update status
+                self.status_var.set("Running NSGA-II optimization...")
+                
+                # Start a separate timer thread for UI updates
+                stop_ui_updates = threading.Event()
+                ui_update_thread = threading.Thread(
+                    target=self._ui_updater, 
+                    args=(stop_ui_updates, callback_state)
+                )
+                ui_update_thread.daemon = True
+                ui_update_thread.start()
+                
+                try:
+                    # Run the optimization
+                    result = minimize(
+                        BalancedWorkload(data),
+                        algorithm,
+                        termination=termination,
+                        seed=1,
+                        verbose=True,
+                        save_history=True,
+                        callback=external_callback
+                    )
+                    
+                    # Calculate execution time
+                    end_time = time.time()
+                    execution_time = end_time - start_time
+                    
+                    # Update status only if still running (not reset)
+                    if callback_state['running']:
+                        self.status_var.set(f"Completed in {execution_time:.2f} seconds")
+                        
+                        # Get solution history from callback state
+                        self.solution_history = callback_state['solution_history']
+                        
+                        # Store the result and execution time for use in save_results
+                        self.last_result = result
+                        self.last_exec_time = execution_time
+                        
+                        # Update solution text with results
+                        self.root.after(0, lambda: self.update_solution_text(result, execution_time))
+                        
+                        # Set progress to 100%
+                        self.progress['value'] = 100
+                        
+                        # Update plot with final results
+                        self.root.after(0, lambda: self.plot_final_results(result))
+                finally:
+                    # Stop UI updates
+                    stop_ui_updates.set()
+                    
+            else:  # PSA algorithm
+                # Create problem object
+                problem = PatientSchedulingProblem(data)
+                
+                # Create PSA algorithm instance
+                psa = ParetoSimulatedAnnealing(
+                    problem=problem,
+                    temperature=self.initial_temp.get(),
+                    cooling_rate=self.cooling_rate.get(),
+                    n_iterations=self.iterations.get()
+                )
+                
+                # Initialize progress tracking
+                total_iterations = self.iterations.get()
+                self.solution_history = []
+                
+                # Create a custom progress tracker
+                def psa_progress_monitor(current_iteration, temperature, front_size):
+                    if not self.running:
+                        return False  # Signal to stop if no longer running
+                        
+                    # Calculate progress percentage
+                    progress = int((current_iteration / total_iterations) * 100)
+                    
+                    # Update UI from main thread
+                    self.root.after(0, lambda: self.progress.config(value=progress))
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"Iteration {current_iteration}/{total_iterations}, Temp: {temperature:.2f}, Front: {front_size}"
+                    ))
+                    
+                    # Store history for visualization periodically
+                    if current_iteration % 50 == 0 or current_iteration == total_iterations:
+                        objectives = np.array(psa.pareto_front_objectives) if psa.pareto_front_objectives else np.array([])
+                        history_entry = {
+                            'generation': current_iteration,
+                            'objectives': objectives.tolist() if len(objectives) > 0 else []
+                        }
+                        self.solution_history.append(history_entry)
+                        
+                        # Update plot from main thread
+                        if len(objectives) > 0:
+                            self.root.after(0, lambda h=history_entry: self.update_plot_with_history(h))
+                    
+                    return True  # Continue running
+                
+                # Set PSA progress monitor
+                psa.progress_callback = psa_progress_monitor
+                
+                # Run optimization
+                self.status_var.set("Running PSA optimization...")
+                pareto_front, objectives = psa.optimize()
                 
                 # Calculate execution time
+                end_time = time.time()
                 execution_time = end_time - start_time
                 
-                # Update status only if still running (not reset)
-                if callback_state['running']:
-                    self.status_var.set(f"Completed in {execution_time:.2f} seconds")
-                    
-                    # Get solution history from callback state
-                    self.solution_history = callback_state['solution_history']
-                    
-                    # Store the result and execution time for use in save_results
-                    self.last_result = result
-                    self.last_exec_time = execution_time
-                    
-                    # Update solution text with results
-                    self.root.after(0, lambda: self.update_solution_text(result, execution_time))
-                    
-                    # Set progress to 100%
-                    self.progress['value'] = 100
-                    
-                    # Update plot with final results
-                    self.root.after(0, lambda: self.plot_final_results(result))
-            finally:
-                # Stop UI updates
-                stop_ui_updates.set()
-                self.running = False
-                self.root.after(0, lambda: self.run_button.config(state=tk.NORMAL))
-            
+                # Create a result object similar to NSGA-II for compatibility
+                class PSAResult:
+                    def __init__(self, X, F, problem, exec_time):
+                        self.X = np.array(X)
+                        self.F = np.array(F)
+                        self.problem = problem
+                        self.success = True
+                        self.algorithm = type('', (), {'n_gen': total_iterations})
+                        
+                result = PSAResult(pareto_front, objectives, problem, execution_time)
+                
+                # Store the result
+                self.last_result = result
+                self.last_exec_time = execution_time
+                
+                # Update the UI
+                self.status_var.set(f"Completed in {execution_time:.2f} seconds")
+                self.progress['value'] = 100
+                
+                # Update the interface with results
+                self.root.after(0, lambda: self.update_solution_text(result, execution_time))
+                self.root.after(0, lambda: self.plot_final_results(result))
+                
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -757,7 +884,7 @@ def main():
     root = tk.Tk()
     
     # Create the application
-    app = NSGAOptimizationApp(root)
+    app = OptimizationApp(root)
     
     # Start the main loop
     root.mainloop()
