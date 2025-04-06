@@ -15,7 +15,7 @@ from pymoo.optimize import minimize
 class OptimizationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("NSGA-II Patient Scheduling Optimization")
+        self.root.title("Patient Scheduling Optimization")
         self.root.geometry("1200x800")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
@@ -207,6 +207,35 @@ class OptimizationApp:
 
         self.comparison_mode()
     
+    # Normalize objective values
+    def normalize_objectives(self, objectives):
+        """
+        Normalize the objectives to a [0,1] range using approximate ideal and nadir points
+        
+        Args:
+            objectives: numpy array of shape (n_solutions, n_objectives)
+            
+        Returns:
+            normalized objectives array of same shape
+        """
+        if len(objectives) <= 1:
+            return objectives  # Can't normalize a single point
+            
+        # Calculate approximate ideal (min of each objective)
+        approx_ideal = np.min(objectives, axis=0)
+        
+        # Calculate approximate nadir (max of each objective)
+        approx_nadir = np.max(objectives, axis=0)
+        
+        # Avoid division by zero
+        denom = approx_nadir - approx_ideal
+        denom = np.where(denom == 0, 1, denom)  # Replace zeros with ones
+        
+        # Normalize: (F - ideal) / (nadir - ideal)
+        normalized = (objectives - approx_ideal) / denom
+        
+        return normalized, approx_ideal, approx_nadir
+    
     def update_algorithm_controls(self):
         """Update the displayed controls based on the selected algorithm"""
         # Remove both frames first
@@ -244,13 +273,23 @@ class OptimizationApp:
             self.solution_details.insert(tk.END, f"Error displaying solution: {str(e)}")
     
     def display_solution_details(self, solution_idx):
-        """Display detailed information about the selected solution"""
+        """Display detailed information about the selected solution with normalized objectives"""
         if not hasattr(self, 'last_result') or self.last_result is None:
             return
         
         # Get the solution data
         solution = self.last_result.X[solution_idx]
         objectives = self.last_result.F[solution_idx]
+        
+        # Get normalization if available
+        normalized_obj = objectives
+        if hasattr(self, 'last_normalization'):
+            # Normalize using stored normalization factors
+            ideal = self.last_normalization['ideal']
+            nadir = self.last_normalization['nadir']
+            denom = nadir - ideal
+            denom = np.where(denom == 0, 1, denom)  # Replace zeros with ones
+            normalized_obj = (objectives - ideal) / denom
         
         # Clear the text widget
         self.solution_details.delete(1.0, tk.END)
@@ -259,10 +298,11 @@ class OptimizationApp:
         self.solution_details.insert(tk.END, f"Solution {solution_idx+1} Details\n")
         self.solution_details.insert(tk.END, f"{'='*40}\n\n")
         
-        # Objective values
-        self.solution_details.insert(tk.END, f"Operational Cost: {objectives[0]:.2f}\n")
-        self.solution_details.insert(tk.END, f"Maximum Workload: {objectives[1]:.4f}\n\n")
+        # Objective values (both raw and normalized)
+        self.solution_details.insert(tk.END, f"Operational Cost: {objectives[0]:.2f} (normalized: {normalized_obj[0]:.2f})\n")
+        self.solution_details.insert(tk.END, f"Maximum Workload: {objectives[1]:.4f} (normalized: {normalized_obj[1]:.2f})\n\n")
         
+        # Rest of the method remains the same...
         # Extract ward and day assignments
         n_patients = len(self.last_result.problem.data['patients'])
         ward_assignments = solution[:n_patients].astype(int)
@@ -564,7 +604,7 @@ class OptimizationApp:
             time.sleep(0.1)  # Small delay to prevent high CPU usage
     
     def update_plot_with_history(self, history_entry):
-        """Update the plot with a specific history entry"""
+        """Update the plot with a specific history entry using normalized objectives"""
         # Clear the current plot
         self.ax.clear()
         
@@ -575,30 +615,45 @@ class OptimizationApp:
             # Convert to numpy array for plotting
             obj_array = np.array(objectives)
             
-            # Plot the objectives
-            self.ax.scatter(obj_array[:, 0], obj_array[:, 1], c='red', label=f'{"Gen" if self.algorithm.get() == "NSGA2" else "Iter"} {generation}')
+            # Normalize objectives
+            norm_obj, ideal, nadir = self.normalize_objectives(obj_array)
+            
+            # Plot the normalized objectives
+            self.ax.scatter(norm_obj[:, 0], norm_obj[:, 1], c='red', 
+                        label=f'{"Gen" if self.algorithm.get() == "NSGA2" else "Iter"} {generation}')
             
             # Plot best front line (convex hull approximation)
-            if len(obj_array) > 2:
+            if len(norm_obj) > 2:
                 try:
                     # Sort points by first objective
-                    sorted_idx = np.argsort(obj_array[:, 0])
-                    sorted_obj = obj_array[sorted_idx]
+                    sorted_idx = np.argsort(norm_obj[:, 0])
+                    sorted_obj = norm_obj[sorted_idx]
                     
-                    # Plot line connecting points (simple front visualization)
+                    # Plot line connecting points
                     self.ax.plot(sorted_obj[:, 0], sorted_obj[:, 1], 'b--', alpha=0.5)
                 except Exception:
                     pass
+                    
+            # Add a note about normalization and scales
+            self.ax.text(0.01, 0.99, 
+                        f"Normalized values\nObj1 scale: [{ideal[0]:.2f}, {nadir[0]:.2f}]\nObj2 scale: [{ideal[1]:.4f}, {nadir[1]:.4f}]", 
+                        transform=self.ax.transAxes, 
+                        verticalalignment='top',
+                        fontsize=8)
         
         # Set labels and title
-        self.ax.set_xlabel('Operational Cost')
-        self.ax.set_ylabel('Maximum Workload')
+        self.ax.set_xlabel('Normalized Operational Cost')
+        self.ax.set_ylabel('Normalized Maximum Workload')
+        
+        # Set axis limits to the normalized range [0,1] with a bit of padding
+        self.ax.set_xlim([-0.05, 1.05])
+        self.ax.set_ylim([-0.05, 1.05])
         
         # Use algorithm-specific terminology in the title
         if self.algorithm.get() == "NSGA2":
-            self.ax.set_title(f'Pareto Front - Generation {generation}')
+            self.ax.set_title(f'Normalized Pareto Front - Generation {generation}')
         else:
-            self.ax.set_title(f'Pareto Front - Iteration {generation}')
+            self.ax.set_title(f'Normalized Pareto Front - Iteration {generation}')
         
         self.ax.grid(True)
         self.ax.legend()
@@ -689,38 +744,61 @@ class OptimizationApp:
         self.canvas.draw()
     
     def plot_final_results(self, result):
-        """Plot the final optimization results"""
+        """Plot the final optimization results with normalized objectives"""
         # Clear the current plot
         self.ax.clear()
         
         # Plot the final Pareto front
         if result.F is not None and len(result.F) > 0:
-            self.ax.scatter(result.F[:, 0], result.F[:, 1], c='red', s=50, label='Final Pareto Front')
+            # Normalize objectives
+            norm_obj, ideal, nadir = self.normalize_objectives(result.F)
+            
+            # Store the normalization factors for use in other methods
+            self.last_normalization = {
+                'ideal': ideal,
+                'nadir': nadir
+            }
+            
+            # Plot normalized Pareto front
+            self.ax.scatter(norm_obj[:, 0], norm_obj[:, 1], c='red', s=50, label='Final Pareto Front')
             
             # Plot line connecting Pareto front points
-            if len(result.F) > 1:
+            if len(norm_obj) > 1:
                 # Sort by first objective
-                sorted_idx = np.argsort(result.F[:, 0])
-                sorted_F = result.F[sorted_idx]
+                sorted_idx = np.argsort(norm_obj[:, 0])
+                sorted_F = norm_obj[sorted_idx]
                 self.ax.plot(sorted_F[:, 0], sorted_F[:, 1], 'b-', alpha=0.7)
+                
+            # Add a note about normalization and scales
+            self.ax.text(0.01, 0.99, 
+                        f"Normalized values\nObj1 scale: [{ideal[0]:.2f}, {nadir[0]:.2f}]\nObj2 scale: [{ideal[1]:.4f}, {nadir[1]:.4f}]", 
+                        transform=self.ax.transAxes, 
+                        verticalalignment='top',
+                        fontsize=8)
         
         # Set labels and title
-        self.ax.set_xlabel('Operational Cost')
-        self.ax.set_ylabel('Maximum Workload')
-        self.ax.set_title('Final Pareto Front')
+        self.ax.set_xlabel('Normalized Operational Cost')
+        self.ax.set_ylabel('Normalized Maximum Workload')
+        self.ax.set_title('Final Normalized Pareto Front')
+        
+        # Set axis limits to the normalized range [0,1] with a bit of padding
+        self.ax.set_xlim([-0.05, 1.05])
+        self.ax.set_ylim([-0.05, 1.05])
+        
         self.ax.grid(True)
         self.ax.legend()
         
         # Redraw the canvas
         self.canvas.draw()
         
-        # Update the solution selector
+        # Update the solution selector with normalized values
         if result.F is not None and len(result.F) > 0:
-            # Create solution options for the dropdown
+            # Create solution options for the dropdown with normalized values
             sorted_idx = np.argsort(result.F[:, 0])
             options = []
             for i, idx in enumerate(sorted_idx):
-                options.append(f"#{i+1}: Cost={result.F[idx, 0]:.2f}, WL={result.F[idx, 1]:.4f}")
+                # Show both raw and normalized values
+                options.append(f"#{i+1}: Cost={result.F[idx, 0]:.2f} ({norm_obj[idx, 0]:.2f}), WL={result.F[idx, 1]:.4f} ({norm_obj[idx, 1]:.2f})")
             
             self.solution_selector['values'] = options
             
@@ -821,6 +899,9 @@ class OptimizationApp:
                 if hasattr(self, 'last_result') and self.last_result is not None:
                     result = self.last_result
                     exec_time = self.last_exec_time
+
+                    # Calculate normalized objectives
+                    norm_obj, ideal, nadir = self.normalize_objectives(result.F)
                     
                     # Execution information
                     f.write("\nExecution Information:\n")
@@ -844,13 +925,14 @@ class OptimizationApp:
                     # Pareto front details
                     f.write("\nPareto Front Solutions:\n")
                     f.write("---------------------------------------------------\n")
-                    f.write("     Operational Cost      Maximum Workload\n")
+                    f.write(f"Range: Cost [{ideal[0]:.2f}, {nadir[0]:.2f}], Workload [{ideal[1]:.4f}, {nadir[1]:.4f}]\n")
+                    f.write("     Operational Cost      Maximum Workload      Normalized Cost   Normalized WL\n")
                     f.write("---------------------------------------------------\n")
                     
                     # Sort solutions by operational cost
                     sorted_idx = np.argsort(result.F[:, 0])
                     for i, idx in enumerate(sorted_idx):
-                        f.write(f"{i+1:3d}. {result.F[idx, 0]:20.4f} {result.F[idx, 1]:20.4f}\n")
+                        f.write(f"{i+1:3d}. {result.F[idx, 0]:20.4f} {result.F[idx, 1]:20.4f} {norm_obj[idx, 0]:18.4f} {norm_obj[idx, 1]:13.4f}\n")
                     
                     # Evolution history summary
                     if algorithm_type == "NSGA2":
@@ -1139,7 +1221,7 @@ class OptimizationApp:
             self.root.after(0, lambda: self.run_button.config(state=tk.NORMAL))
 
     def _update_comparison_tree(self, algorithm, result, execution_time):
-        """Update the comparison results tree with algorithm results"""
+        """Update the comparison results tree with algorithm results including normalized values"""
         if result.F is not None and len(result.F) > 0:
             # Calculate min and max for both objectives
             min_cost = np.min(result.F[:, 0])
@@ -1147,39 +1229,77 @@ class OptimizationApp:
             min_workload = np.min(result.F[:, 1])
             max_workload = np.max(result.F[:, 1])
             
-            # Add to tree
+            # Normalize objectives for this algorithm
+            norm_obj, ideal, nadir = self.normalize_objectives(result.F)
+            
+            # Calculate normalized min and max values
+            norm_min_cost = np.min(norm_obj[:, 0])
+            norm_max_cost = np.max(norm_obj[:, 0])
+            norm_min_workload = np.min(norm_obj[:, 1])
+            norm_max_workload = np.max(norm_obj[:, 1])
+            
+            # Add to tree with both raw and normalized values
             self.results_tree.insert("", tk.END, values=(
                 algorithm,
-                f"{min_cost:.2f} - {max_cost:.2f}",
-                f"{min_workload:.4f} - {max_workload:.4f}",
+                f"{min_cost:.2f} - {max_cost:.2f}\n(Norm: {norm_min_cost:.2f} - {norm_max_cost:.2f})",
+                f"{min_workload:.4f} - {max_workload:.4f}\n(Norm: {norm_min_workload:.2f} - {norm_max_workload:.2f})",
                 len(result.F),
                 f"{execution_time:.2f}"
             ))
 
     def _update_comparison_plot(self):
-        """Update the main plot with comparison results from both algorithms"""
+        """Update the main plot with normalized comparison results from both algorithms"""
         # Clear the plot
         self.ax.clear()
         
         colors = {'NSGA2': 'blue', 'PSA': 'red'}
         markers = {'NSGA2': 'o', 'PSA': 'x'}
         
-        # Plot results for each algorithm
+        # Collect all objective values for global normalization
+        all_objectives = []
         for algo, data in self.comparison_results.items():
             result = data['result']
             if result.F is not None and len(result.F) > 0:
-                self.ax.scatter(
-                    result.F[:, 0], result.F[:, 1],
-                    c=colors.get(algo, 'green'),
-                    marker=markers.get(algo, '+'),
-                    s=50, alpha=0.7,
-                    label=f'{algo} ({len(result.F)} solutions)'
-                )
+                all_objectives.append(result.F)
+        
+        if all_objectives:
+            # Concatenate all objectives for global normalization
+            combined_objectives = np.vstack(all_objectives)
+            norm_combined, ideal, nadir = self.normalize_objectives(combined_objectives)
+            
+            # Split the normalized objectives back per algorithm
+            start_idx = 0
+            for algo, data in self.comparison_results.items():
+                result = data['result']
+                if result.F is not None and len(result.F) > 0:
+                    size = len(result.F)
+                    norm_obj = norm_combined[start_idx:start_idx+size]
+                    start_idx += size
+                    
+                    self.ax.scatter(
+                        norm_obj[:, 0], norm_obj[:, 1],
+                        c=colors.get(algo, 'green'),
+                        marker=markers.get(algo, '+'),
+                        s=50, alpha=0.7,
+                        label=f'{algo} ({len(result.F)} solutions)'
+                    )
+            
+            # Add a note about normalization and scales
+            self.ax.text(0.01, 0.99, 
+                        f"Normalized values\nObj1 scale: [{ideal[0]:.2f}, {nadir[0]:.2f}]\nObj2 scale: [{ideal[1]:.4f}, {nadir[1]:.4f}]", 
+                        transform=self.ax.transAxes, 
+                        verticalalignment='top',
+                        fontsize=8)
         
         # Set labels and title
-        self.ax.set_xlabel('Operational Cost', fontsize=12)
-        self.ax.set_ylabel('Maximum Workload', fontsize=12)
-        self.ax.set_title('Algorithm Comparison on Same Dataset', fontsize=14)
+        self.ax.set_xlabel('Normalized Operational Cost', fontsize=12)
+        self.ax.set_ylabel('Normalized Maximum Workload', fontsize=12)
+        self.ax.set_title('Normalized Algorithm Comparison', fontsize=14)
+        
+        # Set axis limits
+        self.ax.set_xlim([-0.05, 1.05])
+        self.ax.set_ylim([-0.05, 1.05])
+        
         self.ax.grid(True)
         self.ax.legend()
         
