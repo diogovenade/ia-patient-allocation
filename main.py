@@ -1255,38 +1255,45 @@ class OptimizationApp:
         colors = {'NSGA2': 'blue', 'PSA': 'red'}
         markers = {'NSGA2': 'o', 'PSA': 'x'}
         
-        # Collect all objective values for global normalization
-        all_objectives = []
+        # Store original and normalized data for all algorithms
+        normalized_data = {}
+        min_values = [float('inf'), float('inf')]
+        max_values = [float('-inf'), float('-inf')]
+        
+        # First normalize each algorithm's data separately
         for algo, data in self.comparison_results.items():
             result = data['result']
             if result.F is not None and len(result.F) > 0:
-                all_objectives.append(result.F)
+                # Normalize objectives for this algorithm
+                norm_obj, ideal, nadir = self.normalize_objectives(result.F)
+                normalized_data[algo] = {
+                    'normalized': norm_obj,
+                    'ideal': ideal,
+                    'nadir': nadir,
+                    'raw': result.F,
+                    'size': len(result.F)
+                }
+                
+                # Track global min/max values for each objective
+                min_values[0] = min(min_values[0], ideal[0])
+                min_values[1] = min(min_values[1], ideal[1])
+                max_values[0] = max(max_values[0], nadir[0])
+                max_values[1] = max(max_values[1], nadir[1])
         
-        if all_objectives:
-            # Concatenate all objectives for global normalization
-            combined_objectives = np.vstack(all_objectives)
-            norm_combined, ideal, nadir = self.normalize_objectives(combined_objectives)
-            
-            # Split the normalized objectives back per algorithm
-            start_idx = 0
-            for algo, data in self.comparison_results.items():
-                result = data['result']
-                if result.F is not None and len(result.F) > 0:
-                    size = len(result.F)
-                    norm_obj = norm_combined[start_idx:start_idx+size]
-                    start_idx += size
-                    
-                    self.ax.scatter(
-                        norm_obj[:, 0], norm_obj[:, 1],
-                        c=colors.get(algo, 'green'),
-                        marker=markers.get(algo, '+'),
-                        s=50, alpha=0.7,
-                        label=f'{algo} ({len(result.F)} solutions)'
-                    )
-            
-            # Add a note about normalization and scales
+        # Now plot each algorithm with consistent scaling
+        for algo, norm_data in normalized_data.items():
+            self.ax.scatter(
+                norm_data['normalized'][:, 0], norm_data['normalized'][:, 1],
+                c=colors.get(algo, 'green'),
+                marker=markers.get(algo, '+'),
+                s=50, alpha=0.7,
+                label=f'{algo} ({norm_data["size"]} solutions)'
+            )
+        
+        # Add a note about normalization and scales for all algorithms
+        if normalized_data:
             self.ax.text(0.01, 0.99, 
-                        f"Normalized values\nObj1 scale: [{ideal[0]:.2f}, {nadir[0]:.2f}]\nObj2 scale: [{ideal[1]:.4f}, {nadir[1]:.4f}]", 
+                        f"Normalized values\nObj1 scale: [{min_values[0]:.2f}, {max_values[0]:.2f}]\nObj2 scale: [{min_values[1]:.4f}, {max_values[1]:.4f}]", 
                         transform=self.ax.transAxes, 
                         verticalalignment='top',
                         fontsize=8)
@@ -1296,14 +1303,14 @@ class OptimizationApp:
         self.ax.set_ylabel('Normalized Maximum Workload', fontsize=12)
         self.ax.set_title('Normalized Algorithm Comparison', fontsize=14)
         
-        # Set axis limits
+        # Set axis limits to the normalized range [0,1] with a bit of padding
         self.ax.set_xlim([-0.05, 1.05])
         self.ax.set_ylim([-0.05, 1.05])
         
         self.ax.grid(True)
         self.ax.legend()
         
-        # Redraw the main canvas
+        # Redraw the canvas
         self.canvas.draw()
     
     def on_close(self):
