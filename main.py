@@ -34,7 +34,6 @@ class OptimizationApp:
         self.datasets = self.find_datasets()
         self.solution_history = []
         
-        # Create GUI
         self.create_gui()
         
     def find_datasets(self):
@@ -302,11 +301,26 @@ class OptimizationApp:
         self.solution_details.insert(tk.END, f"Operational Cost: {objectives[0]:.2f} (normalized: {normalized_obj[0]:.2f})\n")
         self.solution_details.insert(tk.END, f"Maximum Workload: {objectives[1]:.4f} (normalized: {normalized_obj[1]:.2f})\n\n")
         
-        # Rest of the method remains the same...
         # Extract ward and day assignments
         n_patients = len(self.last_result.problem.data['patients'])
         ward_assignments = solution[:n_patients].astype(int)
         day_assignments = solution[n_patients:].astype(int)
+        
+        # Calculate and show bed capacity violations
+        bed_violations_by_ward = self._calculate_bed_violations(ward_assignments, day_assignments, self.last_result.problem.data)
+        total_violations = sum(sum(violations) for violations in bed_violations_by_ward.values())
+        
+        self.solution_details.insert(tk.END, f"Bed Capacity Violations: {total_violations}\n")
+        
+        if total_violations > 0:
+            self.solution_details.insert(tk.END, "Violations by Ward:\n")
+            for ward_id, day_violations in bed_violations_by_ward.items():
+                ward_total = sum(day_violations)
+                if ward_total > 0:
+                    self.solution_details.insert(tk.END, f"  Ward {ward_id}: {ward_total} violations\n")
+            self.solution_details.insert(tk.END, "\n")
+        else:
+            self.solution_details.insert(tk.END, "No bed capacity violations\n\n")
         
         # Add patient assignments table header
         self.solution_details.insert(tk.END, "Patient Assignments:\n")
@@ -323,7 +337,7 @@ class OptimizationApp:
             # Calculate delay
             delay = max(0, day - patient['earliest_admission'])
             
-            # Only show first 20 patients to avoid flooding the UI
+            # Only show first 20 patients
             if i < 20:
                 self.solution_details.insert(
                     tk.END, 
@@ -465,7 +479,7 @@ class OptimizationApp:
                     end_time = time.time()
                     execution_time = end_time - start_time
                     
-                    # Update status only if still running (not reset)
+                    # Update status only if still running
                     if callback_state['running']:
                         self.status_var.set(f"Completed in {execution_time:.2f} seconds")
                         
@@ -820,7 +834,8 @@ class OptimizationApp:
         
         if algorithm_type == "NSGA2":
             # NSGA-II specific information
-            self.solution_text.insert(tk.END, f"Generations: {result.algorithm.n_gen}\n")
+            actual_gens = result.algorithm.n_gen
+            self.solution_text.insert(tk.END, f"Generations: {actual_gens}\n")
             self.solution_text.insert(tk.END, f"Population Size: {self.population_size.get()}\n")
             self.solution_text.insert(tk.END, f"Mutation Probability: {self.mutation_prob.get()}\n")
         else:  # PSA
@@ -833,13 +848,13 @@ class OptimizationApp:
         
         self.solution_text.insert(tk.END, f"Number of Solutions: {len(result.X)}\n\n")
         
-        # Display top solutions
-        self.solution_text.insert(tk.END, "Top Solutions (Objective Values):\n")
+        # Display example solutions
+        self.solution_text.insert(tk.END, "Example Solutions (Objective Values):\n")
         
         # Sort by first objective (operational cost)
         sorted_idx = np.argsort(result.F[:, 0])
         
-        # Display top 5 solutions or fewer if there are less
+        # Display 5 solutions or fewer if there are less
         for i in range(min(5, len(sorted_idx))):
             idx = sorted_idx[i]
             obj = result.F[idx]
@@ -981,6 +996,26 @@ class OptimizationApp:
                         ward_assignments = solution[:n_patients].astype(int)
                         day_assignments = solution[n_patients:].astype(int)
                         
+                        # Calculate bed capacity violations for this solution
+                        bed_violations_by_ward = self._calculate_bed_violations(ward_assignments, day_assignments, result.problem.data)
+                        total_violations = sum(sum(violations) for violations in bed_violations_by_ward.values())
+                        
+                        # Add bed violations information
+                        f.write(f"Bed Capacity Violations: {total_violations}\n\n")
+                        
+                        # Add detailed bed violations by ward if there are any
+                        if total_violations > 0:
+                            f.write("Violations by Ward:\n")
+                            f.write(f"{'-'*40}\n")
+                            for ward_id, day_violations in bed_violations_by_ward.items():
+                                ward_total = sum(day_violations)
+                                if ward_total > 0:
+                                    f.write(f"Ward {ward_id}: {ward_total} violations\n")
+                                    for day, count in enumerate(day_violations):
+                                        if count > 0:
+                                            f.write(f"  Day {day}: {count} extra patients\n")
+                            f.write("\n")
+                        
                         # Add patient assignments table header
                         f.write("Patient Assignments:\n")
                         f.write(f"{'='*40}\n")
@@ -1029,6 +1064,33 @@ class OptimizationApp:
             import traceback
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to save results: {str(e)}")
+
+    def _calculate_bed_violations(self, ward_assignments, day_assignments, data):
+        """Calculate bed capacity violations for a given solution"""
+        n_wards = len(data['wards'])
+        n_days = data['days']
+        
+        # Initialize dictionary to store violations by ward
+        violations_by_ward = {ward_idx: [0] * n_days for ward_idx in range(n_wards)}
+        
+        # Calculate bed occupancy for each ward and day
+        for ward in range(n_wards):
+            for day in range(n_days):
+                # Count assigned patients in this ward on this day
+                assigned_patients = sum(
+                    1 for i, patient in enumerate(data['patients'])
+                    if ward_assignments[i] == ward and day_assignments[i] <= day < day_assignments[i] + patient['length_of_stay']
+                )
+                
+                # Add carryover patients
+                total_patients = assigned_patients + data['wards'][ward]['carryover_patients'][day]
+                
+                # Check for violation
+                ward_capacity = data['wards'][ward]['bed_capacity']
+                if total_patients > ward_capacity:
+                    violations_by_ward[ward][day] = total_patients - ward_capacity
+        
+        return violations_by_ward
 
     def comparison_mode(self):
         # Comparison mode frame
@@ -1260,7 +1322,7 @@ class OptimizationApp:
         min_values = [float('inf'), float('inf')]
         max_values = [float('-inf'), float('-inf')]
         
-        # First normalize each algorithm's data separately
+        # Normalize each algorithm's data separately
         for algo, data in self.comparison_results.items():
             result = data['result']
             if result.F is not None and len(result.F) > 0:
@@ -1280,7 +1342,7 @@ class OptimizationApp:
                 max_values[0] = max(max_values[0], nadir[0])
                 max_values[1] = max(max_values[1], nadir[1])
         
-        # Now plot each algorithm with consistent scaling
+        # Plot each algorithm with consistent scaling
         for algo, norm_data in normalized_data.items():
             self.ax.scatter(
                 norm_data['normalized'][:, 0], norm_data['normalized'][:, 1],

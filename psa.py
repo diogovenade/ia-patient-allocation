@@ -92,7 +92,7 @@ class PatientSchedulingProblem:
         normalized_workload = np.zeros((self.n_wards, self.n_days))
 
         for ward in range(self.n_wards):
-            max_capacity = self.data['wards'][ward]['workload_capacity']  # βw in the formula
+            max_capacity = self.data['wards'][ward]['workload_capacity']
             if max_capacity > 0:
                 normalized_workload[ward, :] = workload[ward, :] / max_capacity
 
@@ -138,7 +138,7 @@ class ParetoSimulatedAnnealing:
         self.max_iterations = max_iterations
         self.inner_iterations = inner_iterations
         
-        # Generate initial solutions if not provided
+        # Generate initial solutions
         if initial_solutions is None:
             self.solutions = []
             for _ in range(n_initial_solutions):
@@ -161,7 +161,7 @@ class ParetoSimulatedAnnealing:
         self.archive_objectives = []
         
         # Initialize objective weights (equal weight initially)
-        self.objective_weights = np.ones(2) / 2  # Assuming 2 objectives
+        self.objective_weights = np.ones(2) / 2
         
         # Initialize archive with non-dominated solutions from initial population
         for solution in self.solutions:
@@ -176,7 +176,7 @@ class ParetoSimulatedAnnealing:
         """Check if solution 1 dominates solution 2 (assuming minimization)"""
         better_in_any = False
         for f1, f2 in zip(sol1_objectives, sol2_objectives):
-            if f1 > f2:  # For minimization
+            if f1 > f2:
                 return False
             if f1 < f2:
                 better_in_any = True
@@ -286,7 +286,7 @@ class ParetoSimulatedAnnealing:
             solution[n_patients + patient_idx] = random.choice(possible_days)
     
     def update_archive(self, new_solution):
-        """Update the archive with a new solution (line 6 in pseudocode)"""
+        """Update the archive with a new solution"""
         new_objectives, violation = self.evaluate_solution(new_solution)
         
         # Skip solutions that violate constraints
@@ -311,7 +311,7 @@ class ParetoSimulatedAnnealing:
                 
         # If not dominated, add to archive and remove dominated solutions
         if not dominated:
-            # Remove dominated solutions (in reverse order to avoid index issues)
+            # Remove dominated solutions
             for i in sorted(solutions_to_remove, reverse=True):
                 self.archive.pop(i)
                 self.archive_objectives.pop(i)
@@ -323,7 +323,7 @@ class ParetoSimulatedAnnealing:
         return False
     
     def get_closest_solution(self, solution, objectives):
-        """Find closest solution in archive to current solution (line 7 in pseudocode)"""
+        """Find closest solution in archive to current solution"""
         if not self.archive:
             return None, None
             
@@ -350,7 +350,7 @@ class ParetoSimulatedAnnealing:
         return closest_solution, closest_objectives
     
     def update_objective_weights(self, current_objectives, neighbor_objectives):
-        """Update weights based on partial dominance (line 8 in pseudocode)"""
+        """Update weights based on partial dominance"""
         # Count objectives where each solution is better
         current_better = 0
         neighbor_better = 0
@@ -372,7 +372,7 @@ class ParetoSimulatedAnnealing:
             self.objective_weights = self.objective_weights / np.sum(self.objective_weights)
     
     def acceptance_probability(self, current_objectives, neighbor_objectives):
-        """Calculate acceptance probability for dominated solutions (line 10 in pseudocode)"""
+        """Calculate acceptance probability for dominated solutions"""
         # Use weighted sum of objectives
         weighted_current = np.sum(np.array(current_objectives) * self.objective_weights)
         weighted_neighbor = np.sum(np.array(neighbor_objectives) * self.objective_weights)
