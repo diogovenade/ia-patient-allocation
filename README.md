@@ -1,5 +1,7 @@
 # IA Project 1 - Generating balanced workload allocations in hospitals (Grade: 20/20)
 
+Based on https://www.sciencedirect.com/science/article/abs/pii/S2211692323000139 and https://data.mendeley.com/datasets/3mv4rtxtfs/1
+
 To run this program, it is necessary to install the pymoo package with the following command.
 
 ```pip install -U pymoo```
