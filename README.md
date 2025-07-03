@@ -1,4 +1,4 @@
-# IA - Artificial Intelligence Project 1
+# IA Project 1 - Generating balanced workload allocations in hospitals (Grade: 20/20)
 
 To run this program, it is necessary to install the pymoo package with the following command.
 
@@ -26,6 +26,6 @@ How to use:
 - Compare Algorithms: Use the "Compare Algorithms" button to run both algorithms (with your chosen parameters) on the same dataset and compare their performance.
 
 This project was developed by:
-- Daniel Basílio - up201806838@up.pt
-- Diogo Venade - up202207805@up.pt
-- Margarida Fonseca - up202207742@up.pt
+- Daniel Basílio
+- Diogo Venade
+- Margarida Fonseca
